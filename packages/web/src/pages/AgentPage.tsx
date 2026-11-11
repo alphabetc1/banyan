@@ -5,7 +5,7 @@ import { agentGroup, draft, goalPath, newId, type Delivery, type RoomEvent, type
 import { fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "../api.ts";
 import { StatusDot, timeAgo, useAction, useNow } from "../components/common.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus } from "../derive.ts";
+import { actorName, agentStatus } from "../derive.ts";
 import { LanguageContext, useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 
@@ -64,6 +64,42 @@ function useTranscript(agentId: string) {
   return { rows, hasMore, loading: action.busy, error: action.error, loadOlder: () => oldestSeq !== null && void loadOlder(oldestSeq) };
 }
 
+// Who sent a message the agent received, and whether it interrupted the agent.
+function MessageLabel({ messageId }: { messageId: string }) {
+  const t = useT();
+  const state = useRoomStore().state!;
+  const msg = state.messages[messageId];
+  if (!msg) return null;
+  return (
+    <div className="entry-from">
+      {actorName(state, msg.from)}
+      {msg.delivery === "steer" && ` · ${t("agent.interrupt")}`}
+    </div>
+  );
+}
+
+// Messages the agent has not received yet, e.g. while its runner is offline.
+function PendingMessages({ agentId }: { agentId: string }) {
+  const t = useT();
+  const state = useRoomStore().state!;
+  const pending = Object.values(state.messages)
+    .filter((m) => m.toAgentId === agentId && m.deliveredAt === null)
+    .sort((a, b) => a.sentAt - b.sentAt);
+  if (pending.length === 0) return null;
+  return (
+    <div className="pending-messages">
+      {pending.map((m) => (
+        <div key={m.id} className="entry user pending" data-testid="pending-message">
+          <div className="entry-from">
+            {actorName(state, m.from)} · {t("agent.pending")}
+          </div>
+          {m.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Transcript({ agentId }: { agentId: string }) {
   const t = useT();
   const { rows, hasMore, loading, error, loadOlder } = useTranscript(agentId);
@@ -105,6 +141,7 @@ function Transcript({ agentId }: { agentId: string }) {
               className={`entry ${row.entry.kind}`}
               style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${item.start}px)` }}
             >
+              {row.entry.messageId && <MessageLabel messageId={row.entry.messageId} />}
               {row.entry.text}
             </div>
           );
@@ -205,6 +242,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         </div>
         <Transcript agentId={agentId} />
         <div className="stack" style={{ gap: 10 }}>
+          <PendingMessages agentId={agentId} />
           <Approvals agentId={agentId} />
           <Composer agentId={agentId} />
         </div>

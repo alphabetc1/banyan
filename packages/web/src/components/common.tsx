@@ -2,7 +2,10 @@
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { ThemeContext } from "../contexts.ts";
 import { LanguageContext, useT } from "../i18n.ts";
+import type { Agent } from "@banyan/shared";
 import type { CardStatus } from "../derive.ts";
+
+export const ROLE_MARK: Record<Agent["role"], string> = { leader: "★", monitor: "◎", worker: "" };
 
 export function StatusDot({ level, title }: { level: CardStatus; title?: string }) {
   return <span className={`dot ${level}`} title={title} aria-label={level} />;

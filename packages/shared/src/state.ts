@@ -125,6 +125,8 @@ export interface Message {
   text: string;
   delivery: "steer" | "fyi";
   sentAt: number;
+  // When the agent's runner handed it to the agent; null while it waits.
+  deliveredAt: number | null;
 }
 
 export interface RoomState {
@@ -344,12 +346,17 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
     }
     case "message.sent": {
       const p = e.payload;
-      state.messages[p.messageId] = { id: p.messageId, from: e.actor, toAgentId: p.toAgentId, text: p.text, delivery: p.delivery, sentAt: e.ts };
+      state.messages[p.messageId] = { id: p.messageId, from: e.actor, toAgentId: p.toAgentId, text: p.text, delivery: p.delivery, sentAt: e.ts, deliveredAt: null };
       break;
     }
     case "transcript.appended":
-      // Transcript content is stored and paged separately; it only refreshes liveness here.
+      // Transcript content is stored and paged separately; here it refreshes liveness and
+      // marks delivered messages.
       touchAgent(state, e.payload.agentId, e.ts);
+      for (const entry of e.payload.entries) {
+        const msg = entry.messageId ? state.messages[entry.messageId] : undefined;
+        if (msg && msg.toAgentId === e.payload.agentId && msg.deliveredAt === null) msg.deliveredAt = e.ts;
+      }
       break;
   }
   return state;

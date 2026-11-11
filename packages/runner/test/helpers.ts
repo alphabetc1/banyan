@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { newId, type AppendResult, type EventDraft, type RoomState, type ServerMessage } from "@banyan/shared";
 import { buildApp } from "@banyan/server/app";
 
@@ -12,8 +12,9 @@ export function tempDir(prefix: string): string {
 
 export { draft } from "@banyan/shared";
 
-// A bare repository with one commit on main, standing in for the room's fork.
-export function createFork(): string {
+// A bare repository with one commit on main, standing in for the room's fork. `files` maps
+// extra paths in the repository to their contents.
+export function createFork(files: Record<string, string> = {}): string {
   const root = tempDir("fork");
   const bare = join(root, "fork.git");
   const seed = join(root, "seed");
@@ -21,6 +22,10 @@ export function createFork(): string {
   mkdirSync(seed);
   execFileSync("git", ["init", "-b", "main"], { cwd: seed, stdio: "pipe" });
   writeFileSync(join(seed, "README.md"), "seed\n");
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(seed, path)), { recursive: true });
+    writeFileSync(join(seed, path), content);
+  }
   execFileSync("git", ["add", "."], { cwd: seed, stdio: "pipe" });
   execFileSync("git", ["-c", "user.name=banyan", "-c", "user.email=banyan@example.com", "commit", "-m", "seed"], { cwd: seed, stdio: "pipe" });
   execFileSync("git", ["push", bare, "main"], { cwd: seed, stdio: "pipe" });

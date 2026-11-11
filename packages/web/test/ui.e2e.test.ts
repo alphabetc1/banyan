@@ -86,7 +86,14 @@ async function serverState(roomId: string, token: string): Promise<RoomState> {
 
 test("creates a room, invites a second person who joins through the link", async ({ page, browser }) => {
   const { roomId } = await createRoomInUi(page);
-  await expect(page.getByRole("heading", { name: "Make sglang faster" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await expect(page.getByText("No agents yet. Create one to start.")).toBeVisible();
+
+  // The brand keeps you in the room; leaving it goes through the room switcher.
+  await page.getByRole("link", { name: "Banyan" }).click();
+  await expect(page).toHaveURL(`${base}/rooms/${roomId}`);
+  await expect(page.getByLabel("Room")).toHaveValue(roomId);
+  await expect(page.getByLabel("Room").locator("option:checked")).toHaveText("UI e2e room");
 
   await page.getByRole("button", { name: "Invite" }).click();
   const link = await page.getByTestId("invite-link").inputValue();
@@ -107,14 +114,21 @@ test("creates a room, invites a second person who joins through the link", async
   await guest.getByLabel("Your name").fill("Bob");
   await guest.getByRole("button", { name: "Join" }).click();
   await guest.waitForURL(new RegExp(`/rooms/${roomId}$`));
-  await expect(guest.getByRole("heading", { name: "Make sglang faster" })).toBeVisible();
+  await expect(guest.getByRole("heading", { name: "Agents" })).toBeVisible();
   await other.close();
+
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Room").selectOption({ label: "Create or join a room…" });
+  await expect(page).toHaveURL(`${base}/`);
+  await expect(page.getByRole("link", { name: "UI e2e room" })).toBeVisible();
 });
 
 test("builds the goal tree and group from the UI, then shows live agent state and runner presence", async ({ page }) => {
   const room = await createRoomInUi(page);
   const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
 
+  await page.getByRole("link", { name: "Goals" }).click();
+  await expect(page.getByRole("heading", { name: "Make sglang faster" })).toBeVisible();
   await page.getByRole("button", { name: "New sub-goal" }).click();
   await page.getByLabel("Title").fill("Faster prefill");
   await page.getByRole("button", { name: "Create" }).click();
@@ -145,30 +159,50 @@ test("builds the goal tree and group from the UI, then shows live agent state an
   await expect(card).toContainText("waiting_gpu");
   await expect(card).toContainText("working");
 
-  // Dropping the runner connection turns the card offline again without a reload.
+  // The overview lists the agent under its group with the same live status.
+  await page.getByRole("link", { name: "Overview" }).click();
+  const row = page.getByTestId("group-prefill team").getByTestId("agent-row-tok-worker");
+  await expect(row.locator(".dot")).toHaveClass(/green/);
+  await expect(row).toContainText("waiting_gpu · working");
+  await expect(page.locator(".facts")).toContainText("prefill team");
+
+  // Dropping the runner connection turns it offline again without a reload.
   r.ws.close();
+  await expect(row.locator(".dot")).toHaveClass(/offline/);
+  await page.getByRole("link", { name: "Goals" }).click();
+  await page.locator(".tree-item", { hasText: "Faster prefill" }).click();
   await expect(card.locator(".dot")).toHaveClass(/offline/);
 });
 
 test("creates standalone agents without any group and shows them on their goals", async ({ page }) => {
   const room = await createRoomInUi(page);
+  // Without a runner, a browser user is pointed at the desktop client or the runner CLI.
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByText("No machine runs your agents in this room yet: install the desktop client")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
   const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
-  await page.reload();
 
   await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByText(/No machine runs your agents/)).toHaveCount(0);
   await expect(page.getByLabel("Group")).toHaveValue("");
   await expect(page.getByLabel("Role").locator("option[value=leader]")).toBeDisabled();
   await expect(page.getByLabel("Role").locator("option[value=monitor]")).toBeDisabled();
   await page.getByLabel("Agent name").fill("solo");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByTestId("standalone-agents").getByTestId("agent-card-solo")).toBeVisible();
-  await expect(page.getByText("No group or agent works on this goal yet.")).toHaveCount(0);
+  await expect(page.getByTestId("standalone-agents").getByTestId("agent-row-solo")).toBeVisible();
+  // With no selection, the overview shows the first agent's conversation.
+  await expect(page.locator(".agent-main h2")).toHaveText("solo");
+  await expect(page.locator(".facts")).toContainText("Standalone");
 
   const state = await serverState(room.roomId, room.token);
   const agent = Object.values(state.agents).find((a) => a.name === "solo")!;
   expect(agent).toMatchObject({ groupId: null, role: "worker", goalId: room.rootGoalId, runnerId: runner.runnerId });
 
-  // A standalone agent on a sub-goal also shows under the parent goal, marked with its own goal.
+  // On the goals page, a standalone agent on a sub-goal also shows under the parent goal,
+  // marked with its own goal.
+  await page.getByRole("link", { name: "Goals" }).click();
+  await expect(page.getByTestId("standalone-agents").getByTestId("agent-card-solo")).toBeVisible();
+  await expect(page.getByText("No group or agent works on this goal yet.")).toHaveCount(0);
   await page.getByRole("button", { name: "New sub-goal" }).click();
   await page.getByLabel("Title").fill("Faster decode");
   await page.getByRole("button", { name: "Create" }).click();
@@ -182,7 +216,8 @@ test("creates standalone agents without any group and shows them on their goals"
   await expect(page.getByTestId("agent-card-solo")).toHaveCount(0);
 
   await page.getByTestId("agent-card-decode-solo").click();
-  await expect(page.locator(".facts")).toContainText("Standalone");
+  await expect(page.getByTestId("agent-row-decode-solo")).toHaveClass(/selected/);
+  await expect(page.locator(".agent-main h2")).toHaveText("decode-solo");
 });
 
 test("approves an agent's request, sends it a message and reads its live transcript", async ({ page }) => {
@@ -204,7 +239,8 @@ test("approves an agent's request, sends it a message and reads its live transcr
   ]);
 
   await expect(page.getByTestId("attention")).toContainText("bench");
-  await page.getByTestId("agent-card-bench").click();
+  await expect(page.getByTestId("agent-row-bench").locator(".pill.yellow")).toHaveText("1");
+  await page.getByTestId("agent-row-bench").click();
   await expect(page.getByTestId("transcript")).toContainText("history before opening the page");
   await expect(page.getByTestId("approval")).toContainText("python -m sglang.bench_serving");
 
@@ -221,6 +257,17 @@ test("approves an agent's request, sends it a message and reads its live transcr
   await expect
     .poll(async () => Object.values((await serverState(room.roomId, room.token)).messages).map((m) => [m.toAgentId, m.text, m.delivery]))
     .toEqual([[agentId, "Use 500 prompts.", "steer"]]);
+  // Until the runner hands it to the agent, the message shows as pending.
+  await expect(page.getByTestId("pending-message")).toContainText("Rhett · waiting for its runner");
+  await expect(page.getByTestId("pending-message")).toContainText("Use 500 prompts.");
+
+  // The runner records the delivery in the transcript, as it does when the agent receives it.
+  const messageId = Object.keys((await serverState(room.roomId, room.token)).messages)[0]!;
+  await r.append([draft("transcript.appended", { agentId, entries: [{ kind: "user", text: "Use 500 prompts.", ts: Date.now(), messageId }] })]);
+  await expect(page.getByTestId("pending-message")).toHaveCount(0);
+  await expect(page.locator(".entry.user")).toContainText("Rhett · interrupt");
+  await expect(page.locator(".entry.user")).toContainText("Use 500 prompts.");
+  expect((await serverState(room.roomId, room.token)).messages[messageId]!.deliveredAt).toEqual(expect.any(Number));
 });
 
 test("shows an error instead of loading forever when saved credentials are rejected", async ({ page }) => {
@@ -246,20 +293,21 @@ test("keeps transcripts apart when switching agents before a page finishes loadi
   const groupId = newId();
   const [a, b] = [newId(), newId()];
   const common = { groupId, runnerId: runner.runnerId, role: "worker" as const, provider: "claude" as const, model: "default", goalId: room.rootGoalId, instructions: "" };
-  await member.append([draft("group.created", { groupId, goalId: room.rootGoalId, name: "team" }), draft("agent.created", { ...common, agentId: a, name: "alpha" }), draft("agent.created", { ...common, agentId: b, name: "beta" })]);
-  const r = await socket(room.roomId, runner.runnerToken);
-  await r.append([
-    draft("transcript.appended", { agentId: a, entries: [{ kind: "assistant", text: "alpha says hi", ts: Date.now() }] }),
-    draft("transcript.appended", { agentId: b, entries: [{ kind: "assistant", text: "beta says hi", ts: Date.now() }] }),
-  ]);
-  // Hold alpha's first transcript page until after we have moved on to beta.
+  // Hold alpha's first transcript page until after we have moved on to beta. The overview
+  // opens alpha as soon as it exists, so the hold is in place before the agents are created.
   let releaseAlpha!: () => void;
   const alphaHeld = new Promise<void>((resolve) => (releaseAlpha = resolve));
   await page.route(`**/agents/${a}/transcript*`, async (route) => {
     await alphaHeld;
     await route.continue();
   });
-  await page.getByTestId("agent-card-alpha").click();
+  await member.append([draft("group.created", { groupId, goalId: room.rootGoalId, name: "team" }), draft("agent.created", { ...common, agentId: a, name: "alpha" }), draft("agent.created", { ...common, agentId: b, name: "beta" })]);
+  const r = await socket(room.roomId, runner.runnerToken);
+  await r.append([
+    draft("transcript.appended", { agentId: a, entries: [{ kind: "assistant", text: "alpha says hi", ts: Date.now() }] }),
+    draft("transcript.appended", { agentId: b, entries: [{ kind: "assistant", text: "beta says hi", ts: Date.now() }] }),
+  ]);
+  await page.getByTestId("agent-row-alpha").click();
   await page.waitForURL(new RegExp(`/agents/${a}$`));
   // Navigate in-app straight from alpha's page to beta's, so the agent page stays mounted.
   await page.evaluate((path) => {

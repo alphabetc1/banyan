@@ -54,6 +54,8 @@ export const TranscriptEntry = z.object({
   kind: z.enum(["user", "assistant", "tool_call", "tool_result", "system"]),
   text: LongText,
   ts: z.number().int(),
+  // Set on the user entry recording the delivery of a room message to the agent.
+  messageId: Id.optional(),
 });
 export type TranscriptEntry = z.infer<typeof TranscriptEntry>;
 

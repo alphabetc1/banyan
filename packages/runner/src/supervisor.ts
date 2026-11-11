@@ -71,7 +71,9 @@ export class Supervisor {
     );
     for (const r of this.opts.store.unsentApprovalRequests()) stale.add(r.approvalId);
     this.opts.emit([...stale].map((approvalId) => draft("approval.expired", { approvalId, reason: "runner restarted" })));
-    await Promise.all(this.mine(state).map((a) => this.ensureRunning(a.id)));
+    // Agents resume in the background, each reporting its own progress, so the runner counts
+    // as up once it is connected; close() waits for any that are still starting.
+    for (const a of this.mine(state)) void this.ensureRunning(a.id);
     if (this.opts.monitorIntervalMs) this.timers.push(setInterval(() => this.nudgeMonitors(), this.opts.monitorIntervalMs));
   }
 
@@ -319,6 +321,8 @@ export class Supervisor {
     }
     run.session.send(text, msg.delivery);
     this.opts.store.markDelivered(messageId);
+    // Providers do not echo input back, so the transcript records what the agent was sent.
+    this.appendTranscript(msg.toAgentId, [{ kind: "user", text: msg.text, ts: Date.now(), messageId }]);
   }
 
   private deliverPendingMessages(agentId: string): void {

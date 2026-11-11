@@ -223,7 +223,7 @@ leader 和 monitor 本身也是 agent（默认 Claude，可选 Codex），由 ru
 
 **风格**：参考 claude.ai 的视觉气质（暖色中性底、衬线标题、宽松留白），不使用任何 Anthropic 品牌元素。
 
-**已确认的 UI 决定**：总览页用"左侧 goal 树 + 右侧卡片墙"；界面中英文可切换；主题跟随系统亮/暗并可手动切换；排版宽松留白，一屏大约 10～20 张 agent 卡片。
+**已确认的 UI 决定**：总览页用"左侧 agent 列表（带状态）+ 右侧选中 agent 的对话"（2026-11-11 Rhett 改定，原先是 goal 树 + 卡片墙，现在移到单独的「目标」页）；界面中英文可切换；主题跟随系统亮/暗并可手动切换；排版宽松留白，一屏大约 10～20 张 agent 卡片。
 
 **页面**
 
@@ -409,4 +409,14 @@ Rhett 确认的决定（2026-11-11）：支持像 Orca 那样直接创建一个�
 - **审核**：独立 agent 提议在 room 级共享的发现，从它自己的目标开始沿目标链向上找，第一个有 leader 的 group 的 leader 负责审核；整条链上都没有 leader 时交给人（进入「需要处理」收件箱）。
 - **唤醒**：独立 agent 报告 done 或 blocked 时没有 leader 可以通知，提醒的是看着 room 的人。
 - **UI**：「新建 agent」对话框的 group 选项里多了「不加入 group（独立 agent）」；所选目标下还没有 group 时这是默认值。总览页在 group 上方单独显示「独立 agent」区域，包括子目标上的独立 agent。
+
+## 22. 像 Claude Code 一样用（2026-11-11）
+
+Rhett 确认的决定：
+
+- **复用 Claude Code 配置**：Claude agent 加载用户本机 Claude Code 的全部配置（`settingSources: ["user", "project", "local"]`、`skills: "all"`），包括 settings、CLAUDE.md（包括从 worktree 向上找到的 CLAUDE.md）、plugins、MCP servers、hooks 和所有 skill。用户个人的 CLAUDE.md 规则会作用于他的所有 agent。在输入框里输入 `/skill名` 可以触发 skill（已用真实 API 验证）。Room MCP 仍然以 `room` 的名字注入。
+- **自己发的消息看得见**：provider 不会回显输入，所以 runner 把消息交给 agent 时，会往 transcript 里写一条带 `messageId` 的 user 记录。投影据此给消息记下 `deliveredAt`。还没送达的消息在 UI 上显示为「待送达」，并标出发送者；打断（steer）的消息另有标注。这个功能上线之前发出的消息没有送达记录，会一直显示为待送达（没做兼容处理）。
+- **runner 状态**：runner 连上 server 就算「运行中」，agent 在后台各自恢复，进度显示在各自的状态里。之前要等所有 agent 都恢复完才算运行中，而加载完整的 Claude Code 配置之后，恢复明显变慢，客户端会长时间显示「启动中」。
+- **总览**：左侧是 agent 列表，独立 agent 排在最前，然后按 group 分组（标出 group 所在的目标）。每行显示状态灯、角色、provider、阶段、活动和待审批数；有待处理项时，列表顶部显示收件箱。右侧是选中 agent 的对话和详情，没有选中时显示列表里的第一个 agent。goal 树和卡片墙移到导航里的「目标」页。
+- **导航**：点「Banyan」回到当前 room 的总览；切换到其他 room、新建或加入 room，都通过顶栏的 room 下拉菜单。
 

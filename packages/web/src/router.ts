@@ -6,6 +6,7 @@ export type Route =
   | { page: "join"; roomId: string }
   | { page: "overview"; roomId: string }
   | { page: "agent"; roomId: string; agentId: string }
+  | { page: "goals"; roomId: string }
   | { page: "worktrees"; roomId: string }
   | { page: "findings"; roomId: string }
   | { page: "coordination"; roomId: string };
@@ -16,6 +17,7 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === "rooms" && parts[1]) {
     const roomId = parts[1];
     if (parts[2] === "agents" && parts[3]) return { page: "agent", roomId, agentId: parts[3] };
+    if (parts[2] === "goals") return { page: "goals", roomId };
     if (parts[2] === "worktrees") return { page: "worktrees", roomId };
     if (parts[2] === "findings") return { page: "findings", roomId };
     if (parts[2] === "coordination") return { page: "coordination", roomId };

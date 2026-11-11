@@ -377,6 +377,60 @@ label {
   font-size: 13px;
 }
 
+/* Overview: agent list + conversation */
+.agents-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 24px;
+  height: 100%;
+  min-height: 0;
+}
+.agent-list {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  overflow: auto;
+  padding: 16px;
+}
+.list-heading {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  margin: 4px 0 4px 8px;
+}
+.agent-row {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  color: var(--text);
+  text-decoration: none;
+}
+.agent-row:hover {
+  background: var(--surface-raised);
+}
+.agent-row.selected {
+  background: var(--accent-soft);
+}
+.agent-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-row .detail {
+  padding-left: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-detail {
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Agent detail */
 .agent-page {
   display: grid;
@@ -407,6 +461,18 @@ label {
 }
 .entry.user {
   background: var(--accent-soft);
+}
+.entry-from {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.pending-messages .entry {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.entry.pending {
+  opacity: 0.75;
 }
 .entry.tool_call,
 .entry.tool_result {
@@ -520,8 +586,15 @@ label {
   color: var(--yellow);
 }
 
+@media (max-width: 1200px) {
+  .agent-page {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .overview,
+  .agents-layout,
   .agent-page,
   .columns {
     grid-template-columns: 1fr;

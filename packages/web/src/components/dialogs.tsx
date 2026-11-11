@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { draft, isGoalWithin, newId, type Agent } from "@banyan/shared";
 import { createInvite } from "../api.ts";
 import { useRoomStore } from "../contexts.ts";
-import { installCommand } from "../desktop.tsx";
+import { inDesktopClient, installCommand } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 import { Dialog, useAction } from "./common.tsx";
 
@@ -109,7 +109,7 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
   return (
     <Dialog title={t("overview.newAgent")} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
-        {myRunners.length === 0 && <span className="error">{t("dialog.noRunner")}</span>}
+        {myRunners.length === 0 && <span className="error">{t(inDesktopClient ? "dialog.noRunnerDesktop" : "dialog.noRunnerBrowser")}</span>}
         <div className="row">
           <label style={{ flex: 1 }}>
             {t("agent.group")}

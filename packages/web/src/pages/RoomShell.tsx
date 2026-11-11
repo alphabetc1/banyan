@@ -6,18 +6,19 @@ import { RoomContext } from "../contexts.ts";
 import { LocalRunnerControl, useAttentionNotifications } from "../desktop.tsx";
 import { useT, type MessageKey } from "../i18n.ts";
 import { RoomStore, useRoomVersion } from "../room-store.ts";
-import { linkProps, routePath, type Route } from "../router.ts";
-import { roomCredentials } from "../session.ts";
-import { AgentPage } from "./AgentPage.tsx";
+import { linkProps, navigate, routePath, type Route } from "../router.ts";
+import { roomCredentials, savedRooms } from "../session.ts";
+import { AgentsPage } from "./AgentsPage.tsx";
 import { CoordinationPage } from "./CoordinationPage.tsx";
 import { FindingsPage } from "./FindingsPage.tsx";
-import { OverviewPage } from "./OverviewPage.tsx";
+import { GoalsPage } from "./GoalsPage.tsx";
 import { WorktreesPage } from "./WorktreesPage.tsx";
 
 type RoomRoute = Exclude<Route, { page: "home" } | { page: "join" }>;
 
 const NAV: { page: RoomRoute["page"]; label: MessageKey }[] = [
   { page: "overview", label: "nav.overview" },
+  { page: "goals", label: "nav.goals" },
   { page: "worktrees", label: "nav.worktrees" },
   { page: "findings", label: "nav.findings" },
   { page: "coordination", label: "nav.coordination" },
@@ -73,10 +74,10 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
     <div className="shell">
       <div>
         <header className="topbar">
-          <a className="brand" {...linkProps("/")} style={{ textDecoration: "none" }}>
+          <a className="brand" {...linkProps(`/rooms/${route.roomId}`)} style={{ textDecoration: "none" }}>
             Banyan
           </a>
-          <span className="muted">{room?.name}</span>
+          <RoomSwitcher roomId={route.roomId} roomName={room?.name ?? route.roomId} />
           <nav>
             {NAV.map((n) => (
               <a key={n.page} className={activePage === n.page ? "active" : ""} {...linkProps(routePath({ page: n.page, roomId: route.roomId } as RoomRoute))}>
@@ -92,13 +93,38 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
         {!store.connected && <div className="banner">{t("top.offline")}</div>}
       </div>
       <main className="content">
-        {route.page === "overview" && <OverviewPage />}
-        {route.page === "agent" && <AgentPage agentId={route.agentId} />}
+        {route.page === "overview" && <AgentsPage />}
+        {route.page === "agent" && <AgentsPage agentId={route.agentId} />}
+        {route.page === "goals" && <GoalsPage />}
         {route.page === "worktrees" && <WorktreesPage />}
         {route.page === "findings" && <FindingsPage />}
         {route.page === "coordination" && <CoordinationPage />}
       </main>
       {inviting && <InviteDialog onClose={() => setInviting(false)} />}
     </div>
+  );
+}
+
+// Switches to another room joined on this device, or goes to the page for creating or
+// joining one.
+function RoomSwitcher({ roomId, roomName }: { roomId: string; roomName: string }) {
+  const t = useT();
+  const others = savedRooms().filter((r) => r.roomId !== roomId);
+  return (
+    <select
+      className="room-switcher"
+      aria-label={t("top.room")}
+      value={roomId}
+      onChange={(e) => navigate(e.target.value === "" ? "/" : `/rooms/${e.target.value}`)}
+      style={{ width: "auto" }}
+    >
+      <option value={roomId}>{roomName}</option>
+      {others.map((r) => (
+        <option key={r.roomId} value={r.roomId}>
+          {r.roomName}
+        </option>
+      ))}
+      <option value="">{t("top.otherRooms")}</option>
+    </select>
   );
 }

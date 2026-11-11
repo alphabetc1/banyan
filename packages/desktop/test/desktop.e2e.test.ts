@@ -56,12 +56,12 @@ async function launch(env: NodeJS.ProcessEnv = {}): Promise<{ app: ElectronAppli
   return { app, page };
 }
 
-async function connectAndCreateRoom(page: Page): Promise<string> {
+async function connectAndCreateRoom(page: Page, fork = createFork()): Promise<string> {
   await page.getByPlaceholder("http://banyan-host:7700").fill(server.base.replace("http://", ""));
   await page.getByRole("button", { name: /Connect/ }).click();
   await expect(page.getByRole("heading", { name: "Banyan" })).toBeVisible();
   await page.getByLabel("Room name").fill("desktop room");
-  await page.getByLabel("Fork repository URL").fill(createFork());
+  await page.getByLabel("Fork repository URL").fill(fork);
   await page.getByLabel("Room goal").fill("Make prefill faster");
   await page.getByLabel("Your name").fill("Rhett");
   await page.getByRole("button", { name: "Create a room" }).click();
@@ -79,8 +79,16 @@ test("connects to a room server, hosts a runner, keeps it in the tray and restor
   let { app, page } = await launch();
   const roomId = await connectAndCreateRoom(page);
 
+  // Inside the client, the agent dialog points at the top-bar switch until a runner exists.
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByText("No machine runs your agents in this room yet: click “Run agents on this machine” in the top bar first.")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Run agents on this machine" }).click();
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByText(/No machine runs your agents/)).toHaveCount(0);
+  await expect(page.getByLabel("Your runner")).toContainText(hostname());
+  await page.getByRole("button", { name: "Cancel" }).click();
   const saved = savedRunner(roomId);
   expect(saved.serverUrl).toBe(server.base);
   const state = await server.state(roomId, await memberToken(page));
@@ -276,4 +284,52 @@ Then reply DONE.`;
     await expect(page.getByText(text, { exact: false }).first()).toBeVisible();
   }
   await app.close();
+});
+
+// A project skill as Claude Code reads it from .claude/skills/<name>/SKILL.md.
+const skill = (name: string, phase: string) => `---
+name: ${name}
+description: Banyan end-to-end test skill. Use it only when asked to.
+---
+Call the room_set_status tool with phase "${phase}". Then reply DONE and do nothing else.
+`;
+
+test("gives Claude agents the user's Claude Code setup, including skills started from the composer", async () => {
+  test.setTimeout(10 * 60_000);
+  const fork = createFork({
+    ".claude/skills/banyan-probe/SKILL.md": skill("banyan-probe", "tangerine-42"),
+    ".claude/skills/banyan-slash/SKILL.md": skill("banyan-slash", "papaya-7"),
+  });
+  const { page } = await launch();
+  const roomId = await connectAndCreateRoom(page, fork);
+  await page.getByRole("button", { name: "Run agents on this machine" }).click();
+  await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
+  const token = await memberToken(page);
+  const { runnerId } = savedRunner(roomId);
+  const rootGoalId = (await server.state(roomId, token)).room!.rootGoalId;
+  const agentId = newId();
+  await appendAsMember(server, roomId, token, [
+    draft("agent.created", {
+      agentId,
+      groupId: null,
+      runnerId,
+      name: "skilled",
+      role: "worker",
+      provider: "claude",
+      model: "default",
+      goalId: rootGoalId,
+      instructions: "This is an automated test of Banyan. Use the banyan-probe skill and do exactly what it says. Then wait for further messages.",
+    }),
+  ]);
+  const phase = async () => (await server.state(roomId, token)).agents[agentId]?.phase?.value;
+  await waitFor(async () => (await phase()) === "tangerine-42", "the agent using the banyan-probe skill", 5 * 60_000, 1000);
+
+  // A slash command typed into the composer starts the skill, as it would in claude itself.
+  await page.getByTestId("agent-row-skilled").click();
+  await page.getByPlaceholder("Message this agent…").fill("/banyan-slash");
+  await page.getByRole("button", { name: "Send" }).click();
+  await waitFor(async () => (await phase()) === "papaya-7", "the agent running /banyan-slash", 5 * 60_000, 1000);
+  // The person's own message is part of the conversation.
+  await expect(page.locator(".entry.user", { hasText: "/banyan-slash" })).toContainText("Rhett");
+  await expect(page.getByTestId("pending-message")).toHaveCount(0);
 });

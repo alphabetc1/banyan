@@ -92,8 +92,10 @@ class ClaudeSession implements AgentSession {
           child.stderr.pipe(process.stderr, { end: false });
           return child;
         },
-        settingSources: [],
-        strictMcpConfig: true,
+        // Same setup as the user's own claude: their settings, CLAUDE.md files, plugins, MCP
+        // servers and hooks load as usual, and every skill they have is available.
+        settingSources: ["user", "project", "local"],
+        skills: "all",
         mcpServers: { room: { type: "http", url: spec.roomMcpUrl } },
         systemPrompt: { type: "preset", preset: "claude_code", append: spec.systemPrompt },
         permissionMode,

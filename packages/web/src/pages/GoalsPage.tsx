@@ -1,15 +1,14 @@
-// Room overview: goal tree on the left, groups and agent cards for the selected goal on the right.
-import { useContext, useState } from "react";
+// Goals page: goal tree on the left, groups and agent cards for the selected goal on the right.
+import { useState } from "react";
 import type { Agent, RoomState } from "@banyan/shared";
-import { StatusDot, timeAgo, useNow } from "../components/common.tsx";
+import { AttentionInbox } from "../components/attention.tsx";
+import { ROLE_MARK, StatusDot, useNow } from "../components/common.tsx";
 import { NewAgentDialog, NewGoalDialog, NewGroupDialog } from "../components/dialogs.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type AttentionItem, type GoalNode } from "../derive.ts";
-import { LanguageContext, useReasonText, useT } from "../i18n.ts";
+import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type GoalNode } from "../derive.ts";
+import { useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
-
-const ROLE_MARK: Record<Agent["role"], string> = { leader: "★", monitor: "◎", worker: "" };
 
 function GoalTreeView({ node, selected, onSelect, depth = 0 }: { node: GoalNode; selected: string; onSelect: (id: string) => void; depth?: number }) {
   const [open, setOpen] = useState(depth < 2);
@@ -67,44 +66,8 @@ function AgentCard({ state, agent, homeGoalId, online, now }: { state: RoomState
   );
 }
 
-function AttentionInbox({ items, state }: { items: AttentionItem[]; state: RoomState }) {
-  const t = useT();
-  const reasonText = useReasonText();
-  const store = useRoomStore();
-  const { lang } = useContext(LanguageContext);
-  const now = useNow();
-  return (
-    <section className="inbox" data-testid="attention">
-      <h3>
-        ⚠ {t("overview.attention")} ({items.length})
-      </h3>
-      {items.length === 0 && <div className="faint" style={{ marginTop: 8 }}>{t("overview.attentionEmpty")}</div>}
-      {items.map((item) => {
-        const agent = state.agents[item.agentId];
-        const href = item.kind === "review" ? `/rooms/${store.roomId}/findings` : `/rooms/${store.roomId}/agents/${item.agentId}`;
-        const key = item.kind === "approval" ? item.approvalId : item.kind === "review" ? item.postId : `u-${item.agentId}`;
-        return (
-          <a key={key} className="inbox-item" {...linkProps(href)}>
-            <strong>{agent?.name}</strong>{" "}
-            {item.kind === "approval" && (
-              <span className="muted">
-                {t("agent.approvalTitle")}: {item.tool} · {timeAgo(item.since, now, lang)}
-              </span>
-            )}
-            {item.kind === "unhealthy" && <span className="muted">{item.reasons.map(reasonText).join(" · ")}</span>}
-            {item.kind === "review" && (
-              <span className="muted">
-                {t("findings.pending")}: {item.summary}
-              </span>
-            )}
-          </a>
-        );
-      })}
-    </section>
-  );
-}
 
-export function OverviewPage() {
+export function GoalsPage() {
   const t = useT();
   const store = useRoomStore();
   useRoomVersion(store);
