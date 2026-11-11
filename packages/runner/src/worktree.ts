@@ -86,6 +86,16 @@ export async function worktreeStatus(path: string, baseSha: string): Promise<{ h
   return { headSha, diffStat: stat };
 }
 
+// Commits everything in the worktree under the agent's name. Runs in the runner process,
+// outside any agent sandbox (Codex never lets agents write .git).
+export async function commitAll(path: string, agentName: string, message: string): Promise<{ sha: string; files: number } | null> {
+  await git(path, ["add", "-A"]);
+  const staged = await git(path, ["diff", "--cached", "--name-only"]);
+  if (staged === "") return null;
+  await git(path, ["-c", `user.name=banyan agent ${agentName}`, "-c", `user.email=${slug(agentName)}@agents.banyan.local`, "commit", "-q", "-m", message]);
+  return { sha: await git(path, ["rev-parse", "HEAD"]), files: staged.split("\n").length };
+}
+
 // Pushes the agent branch to the fork when it has commits beyond the base.
 export async function pushBranch(path: string, branch: string, baseSha: string): Promise<"pushed" | "nothing_to_push"> {
   const headSha = await git(path, ["rev-parse", "HEAD"]);

@@ -99,6 +99,14 @@ describe("ServerLink", () => {
     expect(log.lines).toEqual([{ level: "error", msg: `room server refused access to room ${room.roomId} (401)` }]);
   });
 
+  it("drains queued events before closing", async () => {
+    const { server, room, store, link, agentId } = await setup();
+    for (let i = 0; i < 20; i++) link.emit([draft("agent.phase_reported", { agentId, phase: `step ${i}` })], agentId);
+    await link.drain(5000);
+    expect(store.outboxSize()).toBe(0);
+    expect((await serverAgent(server, room, agentId))?.phase?.value).toBe("step 19");
+  });
+
   it("drops events the server rejects and logs why", async () => {
     const { store, log, link } = await setup();
     link.emit([draft("agent.process_changed", { agentId: "no-such-agent", process: "running" })]);

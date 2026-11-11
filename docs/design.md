@@ -351,3 +351,22 @@ banyan/                     pnpm monorepo, Node 22, TypeScript strict
 - 卡片状态 = `deriveHealth` 加上 runner 在线状态：runner 离线时显示灰灯。健康原因是结构化的，由 UI 按当前语言渲染。
 - 凭证失效或 room 不存在时，连接不再重试，页面直接显示错误。
 - 测试：`pnpm --filter @banyan/web test`（派生逻辑与 i18n），`pnpm --filter @banyan/web test:e2e`（Playwright：真实 server、真实浏览器、真实 runner 连接；浏览器 console 出现任何错误或警告即判失败）。
+
+## 19. 第一次真实试跑（2026-11-11）的结论与修复
+
+试跑配置：`alphabetc1/sglang`，在 Rhett 的 Mac 上跑两个 runner 模拟两个人；1 个 leader + 1 个 monitor + 2 个 worker（Claude 和 Codex 各一个）；任务是只读分析 prefill 路径。Claude 部分花费约 $1.8。整条链路跑通：分工、发现、leader 审核、提交并 push 到 fork、leader 汇总结论后等待人审。
+
+试跑暴露的问题，均已修复并补上测试：
+
+| 问题 | 修复 |
+|---|---|
+| runner 优雅停机时没有排空 outbox，server 上残留过时的 `running` 状态 | `Runner.stop()` 先 `link.drain()`（最多等 5 秒），没发完的事件下次启动再补发 |
+| worker 报告 done 之后，没有任何机制唤醒 leader，leader 一直空闲，不去汇总 | worker 的阶段报为 `done` 或 `blocked` 时，supervisor 给本组 leader 发一条 fyi；提示词里也要求 worker 使用这两个阶段值 |
+| clone 仓库期间 agent 显示 `unknown`，看不出在做什么 | 新增进程状态 `starting`（detail 为 "preparing workspace"），UI 显示"准备工作区中" |
+| Codex 的沙箱在任何情况下都禁止写 `.git`（探针实测：`writableRoots` 和 thread 级配置都无效），每次 commit 都要人工审批 | 新增 Room MCP 工具 `room_commit(message)`，由 runner 在该 agent 自己的 worktree 里提交，提交者身份是 `banyan agent <name>`；两种 provider 统一使用这个工具 |
+| Codex 改文件的审批请求里没有路径，人看不出它要改什么 | 从 `item/started` 通知中记下 fileChange 的路径和 diff，放进审批内容 |
+
+尚未处理（记录在案）：
+
+- 每个 runner 都会完整 clone 一次仓库。同一台机器上跑多个 runner 时，可以考虑用 `--reference` 共享对象库。
+- UI 还不显示每个 agent 的花费。Claude 的花费目前只出现在 transcript 里；Codex 只上报 token 用量，没有美元金额。

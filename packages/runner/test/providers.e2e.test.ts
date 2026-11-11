@@ -1,5 +1,7 @@
 // End-to-end: a real runner drives real Claude Code and Codex agents against a real room
 // server and a real git fork. Costs real API usage; run with `pnpm test:e2e`.
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { newId, type Agent, type RoomState } from "@banyan/shared";
@@ -11,13 +13,16 @@ import { appendAsMember, createFork, createRoom, draft, tempDir, TestServer, wai
 
 const AGENT_TIMEOUT_MS = 6 * 60_000;
 
-const INSTRUCTIONS = `This is an automated end-to-end test of Banyan. Do exactly these steps, nothing else:
+// The file outside the worktree needs a human approval for both providers; committing goes
+// through room_commit, so no git operation should ever wait for a human.
+const instructions = (outsidePath: string) => `This is an automated end-to-end test of Banyan. Do exactly these steps, nothing else:
 1. Call room_get_context.
 2. Call room_set_status with phase "testing".
 3. Call room_declare_direction with summary "e2e direction" and hypothesis "smoke test".
-4. Create a file hello.txt containing exactly the word banyan, then git add and git commit it with message "add hello".
-5. Call room_post_finding with kind "finding", summary "e2e finding", body "done", proposeRoomVisible false.
-6. Remember the codeword PAPAYA for later.
+4. Create a file hello.txt containing exactly the word banyan, then commit it with the room_commit tool, message "add hello".
+5. Write exactly the word ok into the file ${outsidePath} (it is outside your worktree; that is intended).
+6. Call room_post_finding with kind "finding", summary "e2e finding", body "done", proposeRoomVisible false.
+7. Remember the codeword PAPAYA for later.
 Then reply DONE.`;
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -26,6 +31,7 @@ afterEach(async () => {
 });
 
 interface Harness {
+  outsidePath: string;
   server: TestServer;
   room: RoomFixture;
   fork: string;
@@ -44,6 +50,10 @@ async function harness(provider: Agent["provider"]): Promise<Harness> {
   const fork = createFork();
   const room = await createRoom(server, fork);
   const roomDir = tempDir("runner-room");
+  // Outside the worktree and outside the temp directories Codex's sandbox allows by default.
+  const outsideDir = mkdtempSync(join(homedir(), ".banyan-e2e-"));
+  cleanups.push(() => rmSync(outsideDir, { recursive: true, force: true }));
+  const outsidePath = join(outsideDir, "probe.txt");
   const log = new MemoryLogger();
   const groupId = newId();
   const agentId = newId();
@@ -61,13 +71,13 @@ async function harness(provider: Agent["provider"]): Promise<Harness> {
   await appendAsMember(server, room.roomId, room.memberToken, [
     draft("group.created", { groupId, goalId: room.rootGoalId, name: "e2e" }),
   ]);
-  const h: Harness = { server, room, fork, roomDir, agentId, log, state, agent: async () => (await state()).agents[agentId]!, startRunner };
+  const h: Harness = { outsidePath, server, room, fork, roomDir, agentId, log, state, agent: async () => (await state()).agents[agentId]!, startRunner };
   // The agent is created after the runner starts, exercising the live agent.created path.
   h.startRunner = async () => {
     const runner = await startRunner();
     if (!(await state()).agents[agentId]) {
       await appendAsMember(server, room.roomId, room.memberToken, [
-        draft("agent.created", { agentId, groupId, runnerId: room.runnerId, name: "e2e worker", role: "worker", provider, model: DEFAULT_MODEL, goalId: room.rootGoalId, instructions: INSTRUCTIONS }),
+        draft("agent.created", { agentId, groupId, runnerId: room.runnerId, name: "e2e worker", role: "worker", provider, model: DEFAULT_MODEL, goalId: room.rootGoalId, instructions: instructions(outsidePath) }),
       ]);
     }
     return runner;
@@ -113,11 +123,14 @@ async function runScenario(provider: Agent["provider"]): Promise<void> {
   const agent = finished.agents[h.agentId]!;
   expect(agent.providerSessionId).toBeTruthy();
   expect(agent.process).toBe("running");
-  expect(agent.phase?.value).toBe("testing");
+  // Agents are told to report "done" once finished, which may already have replaced "testing".
+  expect(["testing", "done"]).toContain(agent.phase?.value);
   expect(Object.values(finished.posts).filter((p) => p.agentId === h.agentId && p.kind === "direction").map((p) => p.summary)).toEqual(["e2e direction"]);
   const approvals = Object.values(finished.approvals).filter((a) => a.agentId === h.agentId);
-  expect(approvals.length).toBeGreaterThan(0);
   expect(approvals.every((a) => a.state === "allowed")).toBe(true);
+  expect(approvals.some((a) => a.input.includes(h.outsidePath))).toBe(true);
+  expect(readFileSync(h.outsidePath, "utf8").trim()).toBe("ok");
+  expect(approvals.filter((a) => /git (add|commit)/.test(a.input))).toEqual([]);
 
   // The turn end syncs the worktree and pushes the branch to the fork.
   const wt = await waitFor(async () => {

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createWorktree, ensureClone, git, pushBranch, worktreeStatus } from "../src/worktree.ts";
+import { commitAll, createWorktree, ensureClone, git, pushBranch, worktreeStatus } from "../src/worktree.ts";
 import { createFork, tempDir } from "./helpers.ts";
 
 const COMMIT = ["-c", "user.name=agent", "-c", "user.email=agent@example.com", "commit"];
@@ -48,6 +48,18 @@ describe("worktrees", () => {
     expect(status.diffStat).toEqual({ files: 3, insertions: 5, deletions: 1 });
     // Untracked files stay untracked for the agent.
     expect(await git(wt.path, ["status", "--porcelain"])).toContain("?? src/");
+  });
+
+  it("commits all changes under the agent's identity, or reports nothing to commit", async () => {
+    const { roomDir, repoDir } = await setup();
+    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseBranch: "main", roomShort: "r", agentName: "Tok Worker" });
+    expect(await commitAll(wt.path, "Tok Worker", "empty")).toBeNull();
+    writeFileSync(join(wt.path, "a.txt"), "a\n");
+    writeFileSync(join(wt.path, "README.md"), "changed\n");
+    const result = await commitAll(wt.path, "Tok Worker", "feat: two files");
+    expect(result).toEqual({ sha: await git(wt.path, ["rev-parse", "HEAD"]), files: 2 });
+    expect(await git(wt.path, ["log", "-1", "--format=%an <%ae>"])).toBe("banyan agent Tok Worker <tok-worker@agents.banyan.local>");
+    expect(await git(wt.path, ["status", "--porcelain"])).toBe("");
   });
 
   it("pushes the branch to the fork only when it has new commits", async () => {

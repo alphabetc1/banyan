@@ -11,7 +11,8 @@ export type Provider = z.infer<typeof Provider>;
 export const GoalStatus = z.enum(["open", "done", "abandoned"]);
 export type GoalStatus = z.infer<typeof GoalStatus>;
 
-export const ProcessState = z.enum(["running", "exited", "crashed", "unknown"]);
+// starting: the runner is preparing the workspace (e.g. cloning the repository) before launch.
+export const ProcessState = z.enum(["starting", "running", "exited", "crashed", "unknown"]);
 export type ProcessState = z.infer<typeof ProcessState>;
 
 export const Activity = z.enum(["working", "idle", "unknown"]);

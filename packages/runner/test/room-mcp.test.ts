@@ -8,6 +8,8 @@ import { ServerLink } from "../src/link.ts";
 import { LocalStore } from "../src/local-store.ts";
 import { MemoryLogger } from "../src/logger.ts";
 import { RoomMcp } from "../src/room-mcp.ts";
+import { commitAll, createWorktree, ensureClone, git } from "../src/worktree.ts";
+import { writeFileSync } from "node:fs";
 import { appendAsMember, createFork, createRoom, draft, tempDir, TestServer, waitFor } from "./helpers.ts";
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -42,7 +44,18 @@ async function setup() {
   const link = new ServerLink({ serverUrl: server.base, roomId: room.roomId, token: room.runnerToken, store, log, onEvents: () => {} });
   await link.start();
   cleanups.push(() => link.close());
-  const mcp = new RoomMcp({ state: () => link.state!, emit: (d, asAgent) => link.emit(d, asAgent), now: Date.now });
+  // W1 gets a real worktree on a real clone so room_commit runs real git.
+  const repoDir = join(tempDir("mcp-repo"), "repo");
+  await ensureClone(link.state!.room!.repoUrl, repoDir);
+  const wt = await createWorktree({ repoDir, path: join(tempDir("mcp-wt"), "w1"), baseBranch: "main", roomShort: "t", agentName: "w1" });
+  link.emit([draft("worktree.created", { worktreeId: newId(), agentId: ids.W1, branch: wt.branch, baseSha: wt.baseSha })]);
+  await waitFor(() => link.state!.agents[ids.W1]?.worktreeId, "W1 worktree in projection");
+  const mcp = new RoomMcp({
+    state: () => link.state!,
+    emit: (d, asAgent) => link.emit(d, asAgent),
+    now: Date.now,
+    commit: (agentId, message) => (agentId === ids.W1 ? commitAll(wt.path, "w1", message) : Promise.reject(new Error("no worktree"))),
+  });
   await mcp.start();
   cleanups.push(() => mcp.close());
 
@@ -56,7 +69,7 @@ async function setup() {
   }
 
   const serverState = (): Promise<RoomState> => server.state(room.roomId, room.memberToken);
-  return { server, room, ids, mcp, link, log, store, client, serverState };
+  return { server, room, ids, mcp, link, log, store, client, serverState, wt };
 }
 
 const textOf = (r: CallResult) => r.content[0]?.text ?? "";
@@ -65,9 +78,25 @@ describe("Room MCP", () => {
   it("exposes tools by role", async () => {
     const { ids, client } = await setup();
     const common = ["room_declare_direction", "room_get_context", "room_list_directions", "room_post_finding", "room_set_status"];
-    expect(await (await client(ids.W1)).tools()).toEqual(common);
+    expect(await (await client(ids.W1)).tools()).toEqual([...common, "room_commit"].sort());
+    expect(await (await client(ids.W2)).tools()).toEqual([...common, "room_commit"].sort());
+    expect(await (await client(ids.X)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.M)).tools()).toEqual([...common, "room_advise_leader", "room_group_digest"].sort());
     expect(await (await client(ids.L)).tools()).toEqual([...common, "room_create_goal", "room_group_digest", "room_message", "room_pending_reviews", "room_review_post"].sort());
+  });
+
+  it("commits a worker's worktree on its behalf", async () => {
+    const { ids, client, wt } = await setup();
+    const w1 = await client(ids.W1);
+    expect(textOf(await w1.call("room_commit", { message: "nothing yet" }))).toBe("nothing to commit");
+    writeFileSync(join(wt.path, "notes.md"), "# findings\n");
+    const result = await w1.call("room_commit", { message: "docs: add findings" });
+    expect(textOf(result)).toMatch(/^committed 1 file\(s\) as [0-9a-f]{10}$/);
+    expect(await git(wt.path, ["log", "-1", "--format=%s|%an|%ae"])).toBe("docs: add findings|banyan agent w1|w1@agents.banyan.local");
+    // A worker whose worktree does not exist yet gets a clear error, not a missing tool.
+    const early = await (await client(ids.W2)).call("room_commit", { message: "x" });
+    expect(early.isError).toBe(true);
+    expect(textOf(early)).toBe("commit failed: no worktree");
   });
 
   it("rejects requests without the agent's secret", async () => {

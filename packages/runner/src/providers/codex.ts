@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Delivery, TranscriptEntry } from "@banyan/shared";
 import type { AskForApproval } from "./codex-protocol/v2/AskForApproval";
+import type { FileUpdateChange } from "./codex-protocol/v2/FileUpdateChange";
 import type { SandboxMode } from "./codex-protocol/v2/SandboxMode";
 import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { ThreadStatus } from "./codex-protocol/v2/ThreadStatus";
@@ -77,6 +78,12 @@ class AppServerProcess {
   }
 }
 
+// Human-readable summary of a proposed file change for an approval request.
+export function describeFileChange(c: FileUpdateChange): string {
+  const action = c.kind.type === "update" && c.kind.move_path ? `move to ${c.kind.move_path}` : c.kind.type;
+  return `${action} ${c.path}\n${c.diff}`;
+}
+
 function text(t: string): UserInput {
   return { type: "text", text: t, text_elements: [] };
 }
@@ -101,6 +108,9 @@ class CodexSession implements AgentSession {
   readonly ready: Promise<void>;
   threadId: string | null = null;
   private activeTurnId: string | null = null;
+  // Items seen in item/started, so approvals can show what a file change touches; the
+  // approval request itself carries no paths.
+  readonly items = new Map<string, ThreadItem>();
   // fyi messages wait for the current turn to end and are sent together as the next turn.
   private queued: string[] = [];
   // Deliveries run one at a time so a turn/start finishes before the next message picks
@@ -179,9 +189,13 @@ class CodexSession implements AgentSession {
       if (status.type === "active") this.cb.onActivity("working");
       if (status.type === "idle") this.cb.onActivity("idle");
       if (status.type === "systemError") this.cb.onTranscript([{ kind: "system", text: "codex reported a system error", ts: Date.now() }]);
+    } else if (method === "item/started") {
+      const item = params.item as ThreadItem;
+      this.items.set(item.id, item);
     } else if (method === "turn/started") {
       this.activeTurnId = params.turn.id as string;
     } else if (method === "item/completed") {
+      this.items.delete((params.item as ThreadItem).id);
       const entry = itemToTranscript(params.item as ThreadItem);
       if (entry) this.cb.onTranscript([entry]);
     } else if (method === "turn/completed") {
@@ -262,10 +276,15 @@ export class CodexProvider implements AgentProvider {
   private async answer(method: string, params: Json): Promise<Json> {
     const session = this.sessions.get(params.threadId as string);
     if (!session) throw new Error(`no Banyan session for thread ${params.threadId}`);
-    if (method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval") {
-      const tool = method === "item/commandExecution/requestApproval" ? "shell" : "file_change";
-      const input = clip(params.command ?? params.reason ?? JSON.stringify(params));
-      const decision = await session.cb.requestApproval({ tool, input });
+    if (method === "item/commandExecution/requestApproval") {
+      const decision = await session.cb.requestApproval({ tool: "shell", input: clip(params.command ?? params.reason ?? JSON.stringify(params)) });
+      return { decision: decision === "allowed" ? "accept" : "decline" };
+    }
+    if (method === "item/fileChange/requestApproval") {
+      const item = session.items.get(params.itemId as string);
+      const changes = item?.type === "fileChange" ? item.changes.map(describeFileChange).join("\n") : "";
+      const input = clip([params.reason, changes].filter(Boolean).join("\n") || JSON.stringify(params));
+      const decision = await session.cb.requestApproval({ tool: "file_change", input });
       return { decision: decision === "allowed" ? "accept" : "decline" };
     }
     if (method === "mcpServer/elicitation/request") {

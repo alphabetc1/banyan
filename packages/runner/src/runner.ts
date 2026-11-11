@@ -11,6 +11,8 @@ import { CodexProvider } from "./providers/codex.ts";
 import { RoomMcp } from "./room-mcp.ts";
 import { Supervisor } from "./supervisor.ts";
 
+const STOP_DRAIN_MS = 5000;
+
 export interface RunnerConfig {
   serverUrl: string;
   roomId: string;
@@ -46,7 +48,7 @@ export class Runner {
       return this.link.state;
     };
     const emit = (drafts: EventDraft[], asAgent: string | null = null) => this.link.emit(drafts, asAgent);
-    this.mcp = new RoomMcp({ state, emit, now: Date.now });
+    this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message) });
     this.providers = { claude: new ClaudeProvider(config.claudePermissionMode), codex: new CodexProvider(log) };
     supervisor = new Supervisor({
       runnerId: config.runnerId,
@@ -70,6 +72,8 @@ export class Runner {
 
   async stop(): Promise<void> {
     await this.supervisor.close();
+    // Let the final lifecycle events (exited, expired approvals) reach the server.
+    await this.link.drain(STOP_DRAIN_MS);
     await this.providers.claude.close();
     await this.providers.codex.close();
     await this.mcp.close();

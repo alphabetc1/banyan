@@ -29,6 +29,8 @@ export interface RoomAccess {
   state(): RoomState;
   emit(drafts: EventDraft[], asAgent: string): void;
   now(): number;
+  // Commits the agent's own worktree; null when there was nothing to commit.
+  commit(agentId: string, message: string): Promise<{ sha: string; files: number } | null>;
 }
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -156,6 +158,26 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
       return ok(recent(directions).map((p) => describePost(state, p)));
     },
   );
+
+  // Every worker gets a worktree; the tool exists before the server has confirmed it, so an
+  // early call reports a clear error instead of the tool being missing for the session.
+  if (me()?.role === "worker") {
+    server.registerTool(
+      "room_commit",
+      {
+        description: "Commit all changes in your worktree with this message. Use this instead of git commit: your sandbox cannot write .git. Banyan pushes your branch afterwards.",
+        inputSchema: { message: z.string().min(1).max(2000) },
+      },
+      async ({ message }) => {
+        try {
+          const result = await room.commit(agentId, message);
+          return ok(result ? `committed ${result.files} file(s) as ${result.sha.slice(0, 10)}` : "nothing to commit");
+        } catch (e) {
+          return fail(`commit failed: ${(e as Error).message}`);
+        }
+      },
+    );
+  }
 
   const role = me()?.role;
   if (role === "leader" || role === "monitor") {

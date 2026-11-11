@@ -5,15 +5,17 @@ import { mkdirSync } from "node:fs";
 import { draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
-import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt } from "./prompts.ts";
+import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
-import { createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
+import { commitAll, createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
 
 const TRANSCRIPT_FLUSH_MS = 1000;
 const TRANSCRIPT_BATCH_MAX = 200;
 const CRASH_RESTART_DELAY_MS = 5000;
 const CRASH_RESTARTS_MAX = 3;
+// Self-reported phases that should wake the group leader.
+const LEADER_ALERT_PHASES = new Set(["done", "blocked"]);
 
 export interface SupervisorOptions {
   runnerId: string;
@@ -100,6 +102,8 @@ export class Supervisor {
         this.openApprovals.delete(e.payload.approvalId);
       } else if (e.type === "post.created" && e.payload.proposeRoomVisible) {
         this.notifyReviewers(state, e.payload.postId);
+      } else if (e.type === "agent.phase_reported" && LEADER_ALERT_PHASES.has(e.payload.phase)) {
+        this.notifyLeader(state, e.payload.agentId, e.payload.phase, e.payload.note ?? null);
       }
     }
   }
@@ -150,6 +154,7 @@ export class Supervisor {
     try {
       const agent = this.opts.state().agents[agentId];
       if (!agent) return;
+      this.opts.emit([draft("agent.process_changed", { agentId, process: "starting", detail: "preparing workspace" })]);
       const cwd = await this.workingDirectory(agent);
       const resumeId = agent.providerSessionId;
       try {
@@ -162,7 +167,11 @@ export class Supervisor {
         await this.launch(agent, cwd, null, freshAfterLossMessage(this.opts.state(), agent, reason));
       }
     } catch (e) {
-      if (this.closed) return;
+      if (this.closed) {
+        // Leave no stale "starting" state behind when shutdown interrupts preparation.
+        this.opts.emit([draft("agent.process_changed", { agentId, process: "exited", detail: "runner stopped while starting" })]);
+        return;
+      }
       const detail = (e as Error).message;
       this.opts.log.error(`agent ${agentId} failed to start: ${detail}`);
       this.opts.emit([draft("agent.process_changed", { agentId, process: "crashed", detail: `failed to start: ${detail}` })]);
@@ -177,7 +186,14 @@ export class Supervisor {
     const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null, transcript: [] };
     const provider = this.opts.providers[agent.provider];
     run.session = provider.start(
-      { agentId, cwd, model: agent.model, systemPrompt: systemPrompt(state, agent), roomMcpUrl: this.opts.mcp.urlFor(agentId), resumeSessionId },
+      {
+        agentId,
+        cwd,
+        model: agent.model,
+        systemPrompt: systemPrompt(state, agent),
+        roomMcpUrl: this.opts.mcp.urlFor(agentId),
+        resumeSessionId,
+      },
       {
         onSessionId: (id) => {
           run.sessionId = id;
@@ -257,6 +273,16 @@ export class Supervisor {
     setTimeout(() => void this.ensureRunning(agentId), CRASH_RESTART_DELAY_MS);
   }
 
+  // Commits on behalf of an agent (Room MCP room_commit), then syncs and pushes its branch.
+  async commitFor(agentId: string, message: string): Promise<{ sha: string; files: number } | null> {
+    const wt = this.opts.store.worktree(agentId);
+    const agent = this.opts.state().agents[agentId];
+    if (!wt || !agent) throw new Error("this agent has no worktree");
+    const result = await commitAll(wt.path, agent.name, message);
+    if (result) void this.syncWorktree(agentId);
+    return result;
+  }
+
   private async syncWorktree(agentId: string): Promise<void> {
     const wt = this.opts.store.worktree(agentId);
     const agent = this.opts.state().agents[agentId];
@@ -317,6 +343,15 @@ export class Supervisor {
     for (const reviewerId of postReviewers(state, post)) {
       this.running.get(reviewerId)?.session.send(reviewRequestMessage(author, post.summary), "fyi");
     }
+  }
+
+  // A worker finishing or getting blocked needs its leader's attention, which no review or
+  // message would otherwise trigger.
+  private notifyLeader(state: RoomState, agentId: string, phase: string, note: string | null): void {
+    const agent = state.agents[agentId];
+    const leaderId = agent ? state.groups[agent.groupId]?.leaderAgentId : null;
+    if (!agent || agent.role !== "worker" || !leaderId) return;
+    this.running.get(leaderId)?.session.send(workerPhaseMessage(agent.name, phase, note), "fyi");
   }
 
   private nudgeMonitors(): void {

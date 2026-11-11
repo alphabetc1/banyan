@@ -61,6 +61,15 @@ export class ServerLink {
     return this.connection.isConnected();
   }
 
+  // Waits until every queued event is acknowledged, or the timeout passes; events still
+  // queued afterwards are delivered on the next start.
+  async drain(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.opts.store.outboxSize() > 0 && this.connection.isConnected() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   // Persists drafts locally first, so they are delivered even if the server is down.
   emit(drafts: EventDraft[], asAgent: string | null = null): void {
     if (drafts.length === 0) return;

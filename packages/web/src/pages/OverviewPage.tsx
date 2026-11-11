@@ -58,7 +58,7 @@ function AgentCard({ state, agent, online, now }: { state: RoomState; agent: Age
       </div>
       <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
         <span className="pill">{agent.phase?.value ?? t("agent.noPhase")}</span>
-        <span className="pill">{t(`activity.${agent.activity}`)}</span>
+        {agent.process === "starting" ? <span className="pill">{t("process.starting")}</span> : <span className="pill">{t(`activity.${agent.activity}`)}</span>}
       </div>
       {goal && agent.goalId !== state.groups[agent.groupId]?.goalId && <span className="faint">→ {goal.title}</span>}
       {status.reasons.length > 0 && <span className="reasons">{status.reasons.map(reasonText).join(" · ")}</span>}
