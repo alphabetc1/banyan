@@ -88,6 +88,17 @@ describe("ServerLink", () => {
     expectDisconnectLogs(log);
   });
 
+  it("refuses to start with a rejected token instead of retrying forever", async () => {
+    const { server, room } = await setup();
+    const store = new LocalStore(join(tempDir("runner"), "runner.sqlite"));
+    cleanups.push(() => store.close());
+    const log = new MemoryLogger();
+    const link = new ServerLink({ serverUrl: server.base, roomId: room.roomId, token: "not-a-real-token", store, log, onEvents: () => {} });
+    cleanups.push(() => link.close());
+    await expect(link.start()).rejects.toThrow(`room server refused access to room ${room.roomId} (401)`);
+    expect(log.lines).toEqual([{ level: "error", msg: `room server refused access to room ${room.roomId} (401)` }]);
+  });
+
   it("drops events the server rejects and logs why", async () => {
     const { store, log, link } = await setup();
     link.emit([draft("agent.process_changed", { agentId: "no-such-agent", process: "running" })]);

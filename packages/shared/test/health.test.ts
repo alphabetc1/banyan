@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_HEALTH_THRESHOLDS as T, deriveHealth, emptyRoomState, type Agent, type RoomState } from "../src/index.ts";
+import { DEFAULT_HEALTH_THRESHOLDS as T, deriveHealth, describeHealthReason, emptyRoomState, type Agent, type RoomState } from "../src/index.ts";
 
 const NOW = 10_000_000_000;
 
@@ -44,22 +44,22 @@ describe("deriveHealth", () => {
 
   it("is red when crashed or when the session is lost", () => {
     const crashed = setup({ process: "crashed", processDetail: "OOM" });
-    expect(deriveHealth(crashed.state, crashed.agent, NOW)).toEqual({ level: "red", reasons: ["crashed: OOM"] });
+    expect(deriveHealth(crashed.state, crashed.agent, NOW)).toEqual({ level: "red", reasons: [{ code: "crashed", detail: "OOM" }] });
     const lost = setup({ resumability: "lost", resumabilityDetail: "missing transcript" });
-    expect(deriveHealth(lost.state, lost.agent, NOW).reasons).toEqual(["session lost: missing transcript"]);
+    expect(deriveHealth(lost.state, lost.agent, NOW).reasons).toEqual([{ code: "session_lost", detail: "missing transcript" }]);
   });
 
   it("is yellow while an approval waits and red once it waits too long", () => {
     const { state, agent } = setup();
     pendingApproval(state, NOW - 60_000);
-    expect(deriveHealth(state, agent, NOW)).toEqual({ level: "yellow", reasons: ["1 approval(s) waiting for a human"] });
+    expect(deriveHealth(state, agent, NOW)).toEqual({ level: "yellow", reasons: [{ code: "approvals_waiting", count: 1 }] });
     pendingApproval(state, NOW - T.approvalWaitMs - 60_000);
-    expect(deriveHealth(state, agent, NOW)).toEqual({ level: "red", reasons: ["1 approval(s) waiting 11 min"] });
+    expect(deriveHealth(state, agent, NOW)).toEqual({ level: "red", reasons: [{ code: "approvals_overdue", count: 1, minutes: 11 }] });
   });
 
   it("flags a silent working agent as stalled, with a longer limit while waiting for a GPU", () => {
     const silent = setup({ lastEventAt: NOW - T.stallMs - 60_000 });
-    expect(deriveHealth(silent.state, silent.agent, NOW)).toEqual({ level: "yellow", reasons: ["no activity for 16 min"] });
+    expect(deriveHealth(silent.state, silent.agent, NOW)).toEqual({ level: "yellow", reasons: [{ code: "stalled", minutes: 16 }] });
     const gpu = setup({ lastEventAt: NOW - T.stallMs - 60_000, phase: { value: "waiting_gpu", note: null, updatedAt: NOW - 60_000 } });
     expect(deriveHealth(gpu.state, gpu.agent, NOW).level).toBe("green");
     const idle = setup({ activity: "idle", lastEventAt: NOW - T.stallMs - 60_000 });
@@ -68,8 +68,34 @@ describe("deriveHealth", () => {
 
   it("flags a stale self-reported phase and a stopped agent", () => {
     const stale = setup({ phase: { value: "benchmarking", note: null, updatedAt: NOW - T.phaseStaleMs - 60_000 } });
-    expect(deriveHealth(stale.state, stale.agent, NOW).reasons).toEqual(['phase "benchmarking" not updated for 121 min']);
+    expect(deriveHealth(stale.state, stale.agent, NOW).reasons).toEqual([{ code: "phase_stale", phase: "benchmarking", minutes: 121 }]);
     const exited = setup({ process: "exited", activity: "idle" });
-    expect(deriveHealth(exited.state, exited.agent, NOW)).toEqual({ level: "yellow", reasons: ["not running"] });
+    expect(deriveHealth(exited.state, exited.agent, NOW)).toEqual({ level: "yellow", reasons: [{ code: "not_running" }] });
+  });
+
+  it("describes every reason in English for agents", () => {
+    expect(
+      [
+        { code: "crashed", detail: null },
+        { code: "crashed", detail: "OOM" },
+        { code: "session_lost", detail: "gone" },
+        { code: "approvals_overdue", count: 2, minutes: 12 },
+        { code: "approvals_waiting", count: 1 },
+        { code: "not_running" },
+        { code: "context_full" },
+        { code: "stalled", minutes: 20 },
+        { code: "phase_stale", phase: "benchmarking", minutes: 130 },
+      ].map((r) => describeHealthReason(r as Parameters<typeof describeHealthReason>[0])),
+    ).toEqual([
+      "crashed",
+      "crashed: OOM",
+      "session lost: gone",
+      "2 approval(s) waiting 12 min",
+      "1 approval(s) waiting for a human",
+      "not running",
+      "context window full",
+      "no activity for 20 min",
+      'phase "benchmarking" not updated for 130 min',
+    ]);
   });
 });

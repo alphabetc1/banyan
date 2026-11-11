@@ -340,4 +340,14 @@ banyan/                     pnpm monorepo, Node 22, TypeScript strict
 已知限制：
 
 - runner 冷启动时必须先连上 server 拿到 room 状态，才能恢复 agent。断网状态下重启 runner，要等网络恢复后 agent 才会被拉起。
-- server 还不知道 runner 是否在线。runner 掉线时，UI 只能根据事件停滞判断，计划在第 4 步（UI）补上 presence。
+- （已在第 4 步解决）server 通过 WebSocket 连接跟踪 runner 是否在线，并广播 `presence`。
+
+## 18. Web UI 实现要点（第 4 步）
+
+- 开发：`pnpm --filter @banyan/web dev`（Vite，代理到 `BANYAN_SERVER`，默认 `http://127.0.0.1:7700`）。生产：`pnpm --filter @banyan/web build` 之后，room server 自动托管 `packages/web/dist`（也可以用 `BANYAN_WEB_DIR` 指定目录）。
+- 演示数据：`pnpm --filter @banyan/web exec tsx scripts/demo-room.ts` 启动一个填好演示数据的 room，并打印邀请链接。
+- 邀请链接格式为 `/join/<roomId>#invite=<token>`。token 放在 URL fragment 里，不会出现在 server 日志中。成员凭证只保存在浏览器的 localStorage。
+- 状态复用 shared 的 `RoomConnection` 和 `applyEvent`，渲染节流到 10Hz。transcript 历史按页拉取，新内容通过实时事件追加，长列表做虚拟化。
+- 卡片状态 = `deriveHealth` 加上 runner 在线状态：runner 离线时显示灰灯。健康原因是结构化的，由 UI 按当前语言渲染。
+- 凭证失效或 room 不存在时，连接不再重试，页面直接显示错误。
+- 测试：`pnpm --filter @banyan/web test`（派生逻辑与 i18n），`pnpm --filter @banyan/web test:e2e`（Playwright：真实 server、真实浏览器、真实 runner 连接；浏览器 console 出现任何错误或警告即判失败）。

@@ -1,5 +1,5 @@
 // System prompts and runner-originated messages that explain the Banyan protocol to agents.
-import type { Agent, RoomState } from "@banyan/shared";
+import { goalPath, type Agent, type RoomState } from "@banyan/shared";
 
 const COMMON = `You are an agent in a Banyan room: several agents, run by several people, work toward a shared goal tree.
 Coordinate only through the room_* tools:
@@ -22,15 +22,10 @@ stuck or unhealthy agents, duplicate or drifting work, and promising directions.
 room_advise_leader (severity high only for problems needing immediate action). Do not edit the repository.`,
 };
 
-function goalPath(state: RoomState, goalId: string): string {
-  const titles: string[] = [];
-  const seen = new Set<string>();
-  for (let id: string | null = goalId; id !== null && !seen.has(id); id = state.goals[id]?.parentId ?? null) {
-    seen.add(id);
-    const goal = state.goals[id];
-    if (goal) titles.unshift(goal.title);
-  }
-  return titles.join(" → ");
+function goalPathText(state: RoomState, goalId: string): string {
+  return goalPath(state, goalId)
+    .map((g) => g.title)
+    .join(" → ");
 }
 
 export function systemPrompt(state: RoomState, agent: Agent): string {
@@ -38,7 +33,7 @@ export function systemPrompt(state: RoomState, agent: Agent): string {
   return [
     COMMON,
     ROLE[agent.role],
-    `Your name: ${agent.name}. Your group: ${group?.name ?? agent.groupId}. Your goal: ${goalPath(state, agent.goalId)}.`,
+    `Your name: ${agent.name}. Your group: ${group?.name ?? agent.groupId}. Your goal: ${goalPathText(state, agent.goalId)}.`,
     agent.instructions ? `Instructions from the person who started you:\n${agent.instructions}` : "",
   ]
     .filter(Boolean)

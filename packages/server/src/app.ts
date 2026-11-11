@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { z } from "zod";
-import { ClientMessage, newId, type Actor, type EventDraft, type ServerMessage } from "@banyan/shared";
+import { ClientMessage, draft, newId, type Actor, type ServerMessage } from "@banyan/shared";
 import { Rooms } from "./rooms.ts";
 import { Store, type TokenGrant } from "./store.ts";
 
@@ -35,10 +35,6 @@ const TranscriptQuery = z.object({
   limit: z.coerce.number().int().positive().max(TRANSCRIPT_PAGE_MAX).default(50),
 });
 const WsQuery = z.object({ token: z.string().min(1) });
-
-function draft<T extends EventDraft["type"]>(type: T, payload: Extract<EventDraft, { type: T }>["payload"]): EventDraft {
-  return { eventId: newId(), type, payload } as EventDraft;
-}
 
 function bearer(req: FastifyRequest): string | null {
   const header = req.headers.authorization;

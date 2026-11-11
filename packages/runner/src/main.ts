@@ -48,7 +48,13 @@ async function start(args: string[]): Promise<void> {
   const dir = roomDir(values.room);
   const saved = JSON.parse(readFileSync(join(dir, "runner.json"), "utf8")) as SavedRunner;
   const runner = new Runner({ ...saved, roomDir: dir, monitorIntervalMs: MONITOR_INTERVAL_MS }, consoleLogger);
-  await runner.start();
+  try {
+    await runner.start();
+  } catch (e) {
+    console.error(`cannot start runner: ${(e as Error).message}`);
+    await runner.stop();
+    process.exit(1);
+  }
   consoleLogger.info(`runner ${saved.runnerId} connected to room ${saved.roomId}`);
   const shutdown = () => {
     void runner.stop().then(() => process.exit(0));

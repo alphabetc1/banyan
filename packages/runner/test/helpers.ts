@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import WebSocket from "ws";
 import { newId, type AppendResult, type EventDraft, type RoomState, type ServerMessage } from "@banyan/shared";
 import { buildApp } from "@banyan/server/app";
 
@@ -11,9 +10,7 @@ export function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `banyan-${prefix}-`));
 }
 
-export function draft<T extends EventDraft["type"]>(type: T, payload: Extract<EventDraft, { type: T }>["payload"]): EventDraft {
-  return { eventId: newId(), type, payload } as EventDraft;
-}
+export { draft } from "@banyan/shared";
 
 // A bare repository with one commit on main, standing in for the room's fork.
 export function createFork(): string {
@@ -84,13 +81,13 @@ export async function createRoom(server: TestServer, repoUrl: string): Promise<R
 export async function appendAsMember(server: TestServer, roomId: string, token: string, drafts: EventDraft[]): Promise<AppendResult[]> {
   const ws = new WebSocket(`${server.base.replace("http", "ws")}/api/rooms/${roomId}/ws?token=${encodeURIComponent(token)}`);
   await new Promise<void>((resolve, reject) => {
-    ws.once("open", () => resolve());
-    ws.once("error", reject);
+    ws.addEventListener("open", () => resolve(), { once: true });
+    ws.addEventListener("error", () => reject(new Error("websocket error")), { once: true });
   });
   const requestId = newId();
   const results = await new Promise<AppendResult[]>((resolve) => {
-    ws.on("message", (raw) => {
-      const msg = JSON.parse(raw.toString()) as ServerMessage;
+    ws.addEventListener("message", (e) => {
+      const msg = JSON.parse(String(e.data)) as ServerMessage;
       if (msg.type === "append_result" && msg.requestId === requestId) resolve(msg.results);
     });
     ws.send(JSON.stringify({ type: "append", requestId, drafts }));

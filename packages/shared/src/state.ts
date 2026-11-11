@@ -354,6 +354,18 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
   return state;
 }
 
+// Goals from the root down to `goalId`.
+export function goalPath(state: RoomState, goalId: string): Goal[] {
+  const path: Goal[] = [];
+  const seen = new Set<string>();
+  for (let id: string | null = goalId; id !== null && !seen.has(id); id = state.goals[id]?.parentId ?? null) {
+    seen.add(id);
+    const goal = state.goals[id];
+    if (goal) path.unshift(goal);
+  }
+  return path;
+}
+
 // True when `goalId` equals `ancestorId` or lies beneath it in the goal tree.
 export function isGoalWithin(state: RoomState, goalId: string, ancestorId: string): boolean {
   let current: string | null = goalId;

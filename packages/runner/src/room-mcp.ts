@@ -10,6 +10,9 @@ import { z } from "zod";
 import {
   authorize,
   deriveHealth,
+  describeHealthReason,
+  draft,
+  goalPath,
   isGoalWithin,
   newId,
   pendingApprovalCount,
@@ -38,15 +41,8 @@ function fail(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-function goalPath(state: RoomState, goalId: string): string[] {
-  const path: string[] = [];
-  const seen = new Set<string>();
-  for (let id: string | null = goalId; id !== null && !seen.has(id); id = state.goals[id]?.parentId ?? null) {
-    seen.add(id);
-    const goal = state.goals[id];
-    if (goal) path.unshift(goal.title);
-  }
-  return path;
+function goalTitles(state: RoomState, goalId: string): string[] {
+  return goalPath(state, goalId).map((g) => g.title);
 }
 
 function describePost(state: RoomState, p: Post) {
@@ -76,14 +72,10 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
   const me = () => room.state().agents[agentId];
 
   // Pre-checks a draft against the local projection, then queues it for the server.
-  function write(draft: EventDraft): string | null {
-    const error = authorize(room.state(), { kind: "agent", id: agentId }, draft);
-    if (error === null) room.emit([draft], agentId);
+  function write(d: EventDraft): string | null {
+    const error = authorize(room.state(), { kind: "agent", id: agentId }, d);
+    if (error === null) room.emit([d], agentId);
     return error;
-  }
-
-  function draft<T extends EventDraft["type"]>(type: T, payload: Extract<EventDraft, { type: T }>["payload"]): EventDraft {
-    return { eventId: newId(), type, payload } as EventDraft;
   }
 
   server.registerTool(
@@ -96,7 +88,7 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
       const group = state.groups[self.groupId];
       const posts = Object.values(state.posts);
       return ok({
-        you: { name: self.name, role: self.role, group: group?.name, goalPath: goalPath(state, self.goalId) },
+        you: { name: self.name, role: self.role, group: group?.name, goalPath: goalTitles(state, self.goalId) },
         groupFindings: recent(posts.filter((p) => p.groupId === self.groupId && p.kind !== "direction" && p.review.state !== "rejected")).map((p) => describePost(state, p)),
         groupDirections: recent(posts.filter((p) => p.groupId === self.groupId && p.kind === "direction")).map((p) => describePost(state, p)),
         roomConclusions: recent(posts.filter((p) => p.proposeRoomVisible && p.review.state === "approved")).map((p) => describePost(state, p)),
@@ -178,7 +170,7 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
         const members = Object.values(state.agents).filter((a) => a.groupId === self.groupId);
         return ok({
           group: state.groups[self.groupId]?.name,
-          goalPath: goalPath(state, state.groups[self.groupId]?.goalId ?? self.goalId),
+          goalPath: goalTitles(state, state.groups[self.groupId]?.goalId ?? self.goalId),
           agents: members.map((a) => {
             const wt = a.worktreeId ? state.worktrees[a.worktreeId] : undefined;
             const direction = recent(Object.values(state.posts).filter((p) => p.agentId === a.id && p.kind === "direction"), 1)[0];
@@ -187,7 +179,7 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
               role: a.role,
               provider: a.provider,
               goal: state.goals[a.goalId]?.title,
-              health: deriveHealth(state, a, now),
+              health: (({ level, reasons }) => ({ level, reasons: reasons.map(describeHealthReason) }))(deriveHealth(state, a, now)),
               process: a.process,
               activity: a.activity,
               phase: a.phase?.value ?? null,

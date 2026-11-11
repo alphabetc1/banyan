@@ -14,12 +14,10 @@
     "@banyan/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.0.3",
-    "ws": "^8.22.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@banyan/server": "workspace:*",
-    "@types/better-sqlite3": "^9.6.0",
-    "@types/ws": "^8.18.2"
+    "@types/better-sqlite3": "^9.6.0"
   }
 }

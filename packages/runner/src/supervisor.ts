@@ -2,7 +2,7 @@
 // provider callbacks into room events and room events into agent input.
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
+import { draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
 import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt } from "./prompts.ts";
@@ -39,10 +39,6 @@ interface Running {
   activity: "working" | "idle" | null;
   sessionId: string | null;
   transcript: TranscriptEntry[];
-}
-
-function draft<T extends EventDraft["type"]>(type: T, payload: Extract<EventDraft, { type: T }>["payload"]): EventDraft {
-  return { eventId: newId(), type, payload } as EventDraft;
 }
 
 export class Supervisor {
