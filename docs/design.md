@@ -177,6 +177,7 @@ leader 和 monitor 本身也是 agent（默认 Claude，可选 Codex），由 ru
 **Leader**
 
 - 审核 pending 的 post，决定哪些可以进入 room 级共享。
+- 审核链（已确认）：worker 的 post 由本 group 的 leader 审；leader 自己的 post 由上一级 leader 审，即从本 group 的 goal 往上找到的第一个挂有"带 leader 的 group"的祖先 goal，该 goal 上所有 group 的 leader 都可以审；找到顶都没有时（例如 room 级 leader 自己的 post），只能由人审。
 - 拆子 goal，给 worker 派活或纠偏。
 - 接收 monitor 的建议。
 - 人可以在 UI 上覆盖 leader 的任何审核决定（human override 会写进 event log）。

@@ -1,7 +1,7 @@
 // Write authorization and referential checks for event drafts.
 // The server runs this before appending; it returns a reason string when the draft is rejected.
 import { SERVER_ONLY_EVENT_TYPES, type Actor, type EventDraft } from "./events.ts";
-import { isGoalWithin, type Agent, type RoomState } from "./state.ts";
+import { isGoalWithin, postReviewers, type Agent, type RoomState } from "./state.ts";
 
 function agentOwnedByRunner(state: RoomState, actor: Actor, agentId: string): string | null {
   const agent = state.agents[agentId];
@@ -107,10 +107,9 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       // Humans may override any review decision at any time.
       if (actor.kind === "member") return null;
       const agent = actingAgent(state, actor);
-      if (!agent || agent.role !== "leader" || state.groups[post.groupId]?.leaderAgentId !== agent.id) {
-        return "only the post's group leader may review it";
+      if (!agent || !postReviewers(state, post).includes(agent.id)) {
+        return "only the post's group leader, or the parent leader for a leader's own post, may review it";
       }
-      if (post.agentId === agent.id) return "leaders may not review their own posts";
       if (post.review.state !== "pending") return "post is not awaiting review";
       return null;
     }

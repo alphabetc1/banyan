@@ -364,3 +364,21 @@ export function isGoalWithin(state: RoomState, goalId: string, ancestorId: strin
 export function pendingApprovalCount(state: RoomState, agentId: string): number {
   return Object.values(state.approvals).filter((a) => a.agentId === agentId && a.state === "pending").length;
 }
+
+// Agents allowed to review a post: the leader of the author's group, or, when the author
+// is that leader, the leaders of groups on the nearest ancestor goal that has any.
+// An empty result means only humans can review it.
+export function postReviewers(state: RoomState, post: Post): string[] {
+  const group = state.groups[post.groupId];
+  if (!group) return [];
+  if (group.leaderAgentId !== null && group.leaderAgentId !== post.agentId) return [group.leaderAgentId];
+  const seen = new Set<string>();
+  for (let goalId = state.goals[group.goalId]?.parentId ?? null; goalId !== null && !seen.has(goalId); goalId = state.goals[goalId]?.parentId ?? null) {
+    seen.add(goalId);
+    const leaders = Object.values(state.groups)
+      .filter((g) => g.goalId === goalId && g.leaderAgentId !== null)
+      .map((g) => g.leaderAgentId as string);
+    if (leaders.length > 0) return leaders;
+  }
+  return [];
+}

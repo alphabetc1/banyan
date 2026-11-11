@@ -5,6 +5,7 @@ import {
   emptyRoomState,
   isGoalWithin,
   pendingApprovalCount,
+  postReviewers,
   type Actor,
   type EventDraft,
   type RoomState,
@@ -170,15 +171,43 @@ describe("authorize", () => {
     expect(r.submit(agent("W2"), post)).toBe("agents may only post as themselves");
   });
 
-  it("restricts reviews to the post's own group leader, excluding self-review", () => {
+  it("restricts reviews to the post's own group leader", () => {
     const r = seededRoom();
     r.must(agent("W1"), draft("post.created", { postId: "p1", agentId: "W1", kind: "finding", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
-    r.must(agent("L"), draft("post.created", { postId: "pl", agentId: "L", kind: "conclusion", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
-    expect(r.submit(agent("W2"), draft("post.reviewed", { postId: "p1", decision: "approved" }))).toBe("only the post's group leader may review it");
-    expect(r.submit(agent("R"), draft("post.reviewed", { postId: "p1", decision: "approved" }))).toBe("only the post's group leader may review it");
-    expect(r.submit(agent("L"), draft("post.reviewed", { postId: "pl", decision: "approved" }))).toBe("leaders may not review their own posts");
+    expect(postReviewers(r.state, r.state.posts.p1!)).toEqual(["L"]);
+    expect(r.submit(agent("W2"), draft("post.reviewed", { postId: "p1", decision: "approved" }))).toMatch(/only the post's group leader/);
+    expect(r.submit(agent("R"), draft("post.reviewed", { postId: "p1", decision: "approved" }))).toMatch(/only the post's group leader/);
     r.must(agent("L"), draft("post.reviewed", { postId: "p1", decision: "approved" }));
     expect(r.submit(agent("L"), draft("post.reviewed", { postId: "p1", decision: "rejected" }))).toBe("post is not awaiting review");
+  });
+
+  it("sends a leader's own post to the parent goal's leader", () => {
+    const r = seededRoom();
+    r.must(agent("L"), draft("post.created", { postId: "pl", agentId: "L", kind: "conclusion", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    expect(postReviewers(r.state, r.state.posts.pl!)).toEqual(["R"]);
+    expect(r.submit(agent("L"), draft("post.reviewed", { postId: "pl", decision: "approved" }))).toMatch(/parent leader/);
+    r.must(agent("R"), draft("post.reviewed", { postId: "pl", decision: "approved" }));
+  });
+
+  it("skips ancestor goals without a led group when finding the parent leader", () => {
+    const r = seededRoom();
+    // A group on "tokenizer" whose parent goal "prefill" has a group led by L.
+    r.must(ALICE, draft("group.created", { groupId: "tok-group", goalId: "tokenizer", name: "tok" }));
+    r.must(ALICE, draft("agent.created", { agentId: "TL", groupId: "tok-group", runnerId: "runner-a", name: "tl", role: "leader", provider: "claude", model: "m", goalId: "tokenizer", instructions: "" }));
+    r.must(agent("TL"), draft("post.created", { postId: "pt", agentId: "TL", kind: "finding", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    expect(postReviewers(r.state, r.state.posts.pt!)).toEqual(["L"]);
+    // A group on "prefill" with no leader: L's posts go up to R even past it.
+    r.must(ALICE, draft("group.created", { groupId: "leaderless", goalId: "prefill", name: "x" }));
+    r.must(agent("L"), draft("post.created", { postId: "pl", agentId: "L", kind: "finding", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    expect(postReviewers(r.state, r.state.posts.pl!)).toEqual(["R"]);
+  });
+
+  it("leaves the root leader's own posts to humans", () => {
+    const r = seededRoom();
+    r.must(agent("R"), draft("post.created", { postId: "pr", agentId: "R", kind: "conclusion", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    expect(postReviewers(r.state, r.state.posts.pr!)).toEqual([]);
+    expect(r.submit(agent("R"), draft("post.reviewed", { postId: "pr", decision: "approved" }))).toMatch(/parent leader/);
+    r.must(BOB, draft("post.reviewed", { postId: "pr", decision: "approved" }));
   });
 
   it("lets leaders create goals only inside their subtree", () => {
