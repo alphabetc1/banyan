@@ -307,6 +307,12 @@ describe("websocket", () => {
   });
 });
 
+describe("health", () => {
+  it("answers the liveness probe without authentication", async () => {
+    expect(await get("/api/health")).toEqual({ status: 200, json: { ok: true } });
+  });
+});
+
 describe("presence", () => {
   const presence = (m: ServerMessage): m is Extract<ServerMessage, { type: "presence" }> => m.type === "presence";
 

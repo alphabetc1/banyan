@@ -77,6 +77,9 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     void reply.code(400).send({ error: z.prettifyError(error) });
   }
 
+  // Liveness probe for service managers and monitoring.
+  app.get("/api/health", async () => ({ ok: true }));
+
   app.post("/api/rooms", async (req, reply) => {
     const body = CreateRoomBody.safeParse(req.body);
     if (!body.success) return badRequest(reply, body.error);
