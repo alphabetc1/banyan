@@ -4,3 +4,5 @@ dist/
 .DS_Store
 # Regenerated with `codex app-server generate-ts --out spikes/codex-schema`
 spikes/codex-schema/
+test-results/
+playwright-report/
