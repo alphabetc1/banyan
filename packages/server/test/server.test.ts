@@ -1,5 +1,5 @@
 // End-to-end tests against a real server, real SQLite file and real WebSocket clients.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -287,7 +287,8 @@ describe("websocket", () => {
     viewer.send({ type: "subscribe", afterSeq: 0 });
     const all = await viewer.events(6);
     expect(all.filter((e) => e.eventId === d.eventId)).toHaveLength(1);
-    // No further events beyond the six expected.
+    expect(await viewer.take((m): m is Extract<ServerMessage, { type: "presence" }> => m.type === "presence")).toEqual({ type: "presence", onlineRunnerIds: [f.runnerId] });
+    // No further messages beyond the six events and the presence snapshot.
     await new Promise((r) => setTimeout(r, 100));
     expect(viewer.pendingCount()).toBe(0);
     runner.close();
@@ -303,6 +304,48 @@ describe("websocket", () => {
     ]);
     expect(results.map((r) => r.ok)).toEqual([false, true]);
     runner.close();
+  });
+});
+
+describe("presence", () => {
+  const presence = (m: ServerMessage): m is Extract<ServerMessage, { type: "presence" }> => m.type === "presence";
+
+  it("tells subscribers which runners are connected", async () => {
+    const f = await seed();
+    const viewer = await WsClient.connect(base, f.roomId, f.ownerToken);
+    viewer.send({ type: "subscribe", afterSeq: 0 });
+    expect((await viewer.take(presence)).onlineRunnerIds).toEqual([]);
+
+    const runner = await WsClient.connect(base, f.roomId, f.runnerToken);
+    expect((await viewer.take(presence)).onlineRunnerIds).toEqual([f.runnerId]);
+    // A second connection of the same runner (e.g. while reconnecting) keeps it online.
+    const runnerAgain = await WsClient.connect(base, f.roomId, f.runnerToken);
+    expect((await viewer.take(presence)).onlineRunnerIds).toEqual([f.runnerId]);
+    runner.close();
+    expect((await viewer.take(presence)).onlineRunnerIds).toEqual([f.runnerId]);
+    runnerAgain.close();
+    expect((await viewer.take(presence)).onlineRunnerIds).toEqual([]);
+    viewer.close();
+  });
+});
+
+describe("web UI hosting", () => {
+  it("serves the built UI, falls back to index.html for app routes, and keeps API 404s", async () => {
+    await app.close();
+    const webDir = mkdtempSync(join(tmpdir(), "banyan-web-"));
+    writeFileSync(join(webDir, "index.html"), "<!doctype html><title>Banyan</title>");
+    writeFileSync(join(webDir, "app.js"), "console.log('banyan')");
+    app = await buildApp({ dbPath, webDir, now: () => clock });
+    base = await app.listen({ host: "127.0.0.1", port: 0 });
+
+    expect(await (await fetch(`${base}/`)).text()).toContain("<title>Banyan</title>");
+    expect(await (await fetch(`${base}/app.js`)).text()).toBe("console.log('banyan')");
+    const deepLink = await fetch(`${base}/rooms/abc/agents/xyz`);
+    expect(deepLink.status).toBe(200);
+    expect(await deepLink.text()).toContain("<title>Banyan</title>");
+    const missingApi = await fetch(`${base}/api/nope`);
+    expect(missingApi.status).toBe(404);
+    expect(await missingApi.json()).toEqual({ error: "not found" });
   });
 });
 

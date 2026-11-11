@@ -20,5 +20,7 @@ export type AppendResult = { eventId: string; ok: true; seq: number } | { eventI
 
 export type ServerMessage =
   | { type: "events"; events: RoomEvent[] }
+  // Runners currently connected to the room; sent on subscribe and whenever it changes.
+  | { type: "presence"; onlineRunnerIds: string[] }
   | { type: "append_result"; requestId: string; results: AppendResult[] }
   | { type: "error"; error: string };

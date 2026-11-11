@@ -1,5 +1,6 @@
 // HTTP + WebSocket API of the room server.
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { z } from "zod";
 import { ClientMessage, newId, type Actor, type EventDraft, type ServerMessage } from "@banyan/shared";
@@ -11,6 +12,8 @@ const TRANSCRIPT_PAGE_MAX = 200;
 
 export interface AppOptions {
   dbPath: string;
+  // Built web UI to serve; API routes keep precedence and unknown paths fall back to index.html.
+  webDir?: string;
   logger?: boolean;
   now?: () => number;
 }
@@ -55,6 +58,13 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       : false,
   });
   await app.register(fastifyWebsocket);
+  if (opts.webDir) {
+    await app.register(fastifyStatic, { root: opts.webDir });
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
+      return reply.sendFile("index.html");
+    });
+  }
   app.addHook("onClose", async () => store.close());
 
   // Resolves a token for this room, restricted to the allowed kinds; replies 401 otherwise.
@@ -143,7 +153,13 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       return;
     }
     let unsubscribe: (() => void) | null = null;
-    socket.on("close", () => unsubscribe?.());
+    let unsubscribePresence: (() => void) | null = null;
+    const releaseRunner = grant.kind === "runner" ? rooms.runnerConnected(roomId, grant.subjectId) : null;
+    socket.on("close", () => {
+      unsubscribe?.();
+      unsubscribePresence?.();
+      releaseRunner?.();
+    });
 
     socket.on("message", (raw) => {
       let parsed: ReturnType<typeof ClientMessage.safeParse>;
@@ -161,6 +177,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       if (msg.type === "subscribe") {
         unsubscribe?.();
         unsubscribe = rooms.subscribe(roomId, msg.afterSeq, (events) => send({ type: "events", events }));
+        unsubscribePresence ??= rooms.onPresence(roomId, (onlineRunnerIds) => send({ type: "presence", onlineRunnerIds }));
         return;
       }
       const actor = resolveActor(grant, msg.asAgent);

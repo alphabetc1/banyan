@@ -5,10 +5,14 @@ import type { Store } from "./store.ts";
 const REPLAY_PAGE = 1000;
 
 export type Subscriber = (events: RoomEvent[]) => void;
+export type PresenceListener = (onlineRunnerIds: string[]) => void;
 
 interface LiveRoom {
   state: RoomState;
   subscribers: Set<Subscriber>;
+  // Open WebSocket connections per runner; a runner may briefly hold two while reconnecting.
+  runnerConnections: Map<string, number>;
+  presenceListeners: Set<PresenceListener>;
 }
 
 export class Rooms {
@@ -28,7 +32,7 @@ export class Rooms {
       for (const e of page) applyEvent(state, e);
       page = this.store.eventsAfter(roomId, state.lastSeq, { includeTranscript: true, limit: REPLAY_PAGE });
     }
-    room = { state, subscribers: new Set() };
+    room = { state, subscribers: new Set(), runnerConnections: new Map(), presenceListeners: new Set() };
     this.rooms.set(roomId, room);
     return room;
   }
@@ -87,5 +91,38 @@ export class Rooms {
     }
     room.subscribers.add(subscriber);
     return () => room.subscribers.delete(subscriber);
+  }
+
+  onlineRunners(roomId: string): string[] {
+    return [...this.live(roomId).runnerConnections.keys()].sort();
+  }
+
+  // Marks a runner connection open; the returned function marks it closed.
+  runnerConnected(roomId: string, runnerId: string): () => void {
+    const room = this.live(roomId);
+    room.runnerConnections.set(runnerId, (room.runnerConnections.get(runnerId) ?? 0) + 1);
+    this.notifyPresence(room, roomId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (room.runnerConnections.get(runnerId) ?? 1) - 1;
+      if (left > 0) room.runnerConnections.set(runnerId, left);
+      else room.runnerConnections.delete(runnerId);
+      this.notifyPresence(room, roomId);
+    };
+  }
+
+  // Calls the listener now and on every presence change until unsubscribed.
+  onPresence(roomId: string, listener: PresenceListener): () => void {
+    const room = this.live(roomId);
+    room.presenceListeners.add(listener);
+    listener(this.onlineRunners(roomId));
+    return () => room.presenceListeners.delete(listener);
+  }
+
+  private notifyPresence(room: LiveRoom, roomId: string): void {
+    const online = this.onlineRunners(roomId);
+    for (const l of room.presenceListeners) l(online);
   }
 }
