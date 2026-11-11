@@ -93,6 +93,12 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       if (approval.state !== "pending") return "approval already decided";
       return null;
     }
+    case "approval.expired": {
+      const approval = state.approvals[draft.payload.approvalId];
+      if (!approval) return `unknown approval ${draft.payload.approvalId}`;
+      if (approval.state !== "pending") return "approval already decided";
+      return agentOwnedByRunner(state, actor, approval.agentId);
+    }
     case "agent.phase_reported":
       if (actor.kind !== "agent" || actor.id !== draft.payload.agentId) return "agents may only report their own phase";
       return state.agents[actor.id] ? null : `unknown agent ${actor.id}`;

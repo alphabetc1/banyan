@@ -198,8 +198,8 @@ leader 和 monitor 本身也是 agent（默认 Claude，可选 Codex），由 ru
 ## 7. Repo 与 Worktree
 
 - Room 创建时指定 fork 仓库 URL 和 base branch。
-- 每个 runner 在本地 clone 一次，路径为 `~/.banyan/repos/<room>/`；每个 worker agent 开一个 worktree，路径为 `~/.banyan/worktrees/<room>/<agent>/`。
-- 分支名为 `room/<roomShort>/<agentName>`，从 base 切出，记录 `baseSha`。
+- 每个 room 在 runner 本地有一个目录 `~/.banyan/rooms/<roomId>/`（可用 `BANYAN_HOME` 改根目录），内含 `runner.json`（runner 凭证，权限 600）、`runner.sqlite`（outbox 等本地状态）、`repo/`（clone 一次）、`worktrees/<agentId>/`（每个 worker 一个）。
+- 分支名为 `banyan/<roomShort>/<agentName>`，从 `origin/<baseBranch>` 切出，记录 `baseSha`。
 - **永不强删分支**：分支名冲突时自动加后缀。清理 worktree 时如果有未合并的提交，只删 worktree，保留分支。
 - runner 定期（以及每个 turn 结束时）计算 `git diff --numstat <baseSha>`（先执行 `git add -N .`），上报 diffStat。
 - **跨人查看 diff**：runner 在每个 turn 结束时把分支 push 到 fork（已确认可以自动 push；push 失败时只告警，不阻塞 agent）。Worktree 页面展示 numstat、方向和 finding；完整 diff 直接用 fork 上的 compare 链接。
@@ -323,3 +323,19 @@ banyan/                     pnpm monorepo, Node 22, TypeScript strict
 - Codex：每次调用 MCP 工具都会发 `mcpServer/elicitation/request`（工具审批）。runner 只对 room 自己的 server 自动 accept，其他 server 的请求转给 UI。
 - Codex：stdio 帧格式是 JSONL，消息里没有 `jsonrpc` 字段；`initialize` 之后要发 `initialized` 通知。
 - Codex 原生提供 `thread/goal/set`，可以考虑把 session goal 同步过去（待评估）。
+
+## 17. Runner 实现要点（第 3 步）
+
+- 用法：`banyan-runner register --server <url> --room <roomId> --member-token <token>`，然后 `banyan-runner start --room <roomId>`。
+- agent 的 `model` 填 `default` 时，使用该 provider 在本机配置的默认模型。
+- 审批模式：Claude 默认 `auto`（由分类器放行安全操作，拿不准时才问人）；Codex 默认 `on-request` + `workspace-write` 沙箱。e2e 测试用 Claude `default` 模式，强制每次写文件或执行命令都走人工审批。
+- 新增事件 `approval.expired`：发起审批的会话结束（崩溃或 runner 重启）后，由所属 runner 把遗留的待审批项标记为过期。
+- 崩溃自动重启：间隔 5 秒，连续超过 3 次就停下，等人处理；只要有一个 turn 正常结束，计数就清零。
+- resume 失败时：上报 `resumability: lost` 并附原因，然后开新会话，提示 agent 从 `room_get_context` 和 git 历史恢复。
+- 唤醒机制：有新 post 待审时，给审核人（leader）发一条 fyi；monitor 每 10 分钟收到一次例行检查消息（仅在空闲时发）。
+- Claude 消息优先级的映射是 steer → `next`、fyi → `later`。SDK 文档里没有写明这两个值的确切语义，**尚未专门验证** steer 能否在当前 turn 内生效。
+
+已知限制：
+
+- runner 冷启动时必须先连上 server 拿到 room 状态，才能恢复 agent。断网状态下重启 runner，要等网络恢复后 agent 才会被拉起。
+- server 还不知道 runner 是否在线。runner 掉线时，UI 只能根据事件停滞判断，计划在第 4 步（UI）补上 presence。

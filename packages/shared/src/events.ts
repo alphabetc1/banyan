@@ -91,6 +91,8 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant("post.reviewed", z.object({ postId: Id, decision: ReviewDecision, note: LongText.optional() })),
   variant("approval.requested", z.object({ approvalId: Id, agentId: Id, tool: ShortText, input: LongText })),
   variant("approval.decided", z.object({ approvalId: Id, decision: ApprovalDecision, note: LongText.optional() })),
+  // The agent process that asked is gone (crash or restart), so nobody waits for a decision.
+  variant("approval.expired", z.object({ approvalId: Id, reason: ShortText })),
   variant("message.sent", z.object({ messageId: Id, toAgentId: Id, text: LongText, delivery: Delivery })),
   variant("transcript.appended", z.object({ agentId: Id, entries: z.array(TranscriptEntry).min(1).max(200) })),
 ]);

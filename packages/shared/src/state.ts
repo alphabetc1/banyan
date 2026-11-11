@@ -112,7 +112,7 @@ export interface Approval {
   agentId: string;
   tool: string;
   input: string;
-  state: "pending" | ApprovalDecision;
+  state: "pending" | ApprovalDecision | "expired";
   decidedBy: Actor | null;
   requestedAt: number;
 }
@@ -334,6 +334,11 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         approval.state = e.payload.decision;
         approval.decidedBy = e.actor;
       }
+      break;
+    }
+    case "approval.expired": {
+      const approval = state.approvals[e.payload.approvalId];
+      if (approval) approval.state = "expired";
       break;
     }
     case "message.sent": {

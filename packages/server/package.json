@@ -2,14 +2,13 @@
   "name": "@banyan/server",
   "private": true,
   "type": "module",
+  "exports": {
+    "./app": "./src/app.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run",
     "start": "tsx src/main.ts"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
-    "@types/ws": "^8.18.2"
   },
   "dependencies": {
     "@banyan/shared": "workspace:*",
@@ -18,5 +17,9 @@
     "fastify": "^5.12.8",
     "ws": "^8.22.2",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/ws": "^8.18.2"
   }
 }

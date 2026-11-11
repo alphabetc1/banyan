@@ -1,0 +1,25 @@
+{
+  "name": "@banyan/runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --exclude 'test/**/*.e2e.test.ts'",
+    "test:e2e": "vitest run test/providers.e2e.test.ts",
+    "start": "tsx src/main.ts",
+    "codegen:codex": "codex app-server generate-ts --out src/providers/codex-protocol"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.322",
+    "@banyan/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "better-sqlite3": "^13.0.3",
+    "ws": "^8.22.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@banyan/server": "workspace:*",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/ws": "^8.18.2"
+  }
+}

@@ -1,0 +1,159 @@
+// Room MCP tools exercised with a real MCP client against a real server and link.
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { newId, type RoomState } from "@banyan/shared";
+import { ServerLink } from "../src/link.ts";
+import { LocalStore } from "../src/local-store.ts";
+import { MemoryLogger } from "../src/logger.ts";
+import { RoomMcp } from "../src/room-mcp.ts";
+import { appendAsMember, createFork, createRoom, draft, tempDir, TestServer, waitFor } from "./helpers.ts";
+
+const cleanups: (() => Promise<void> | void)[] = [];
+afterEach(async () => {
+  for (const c of cleanups.splice(0).reverse()) await c();
+});
+
+type CallResult = { content: { type: string; text: string }[]; isError?: boolean };
+
+async function setup() {
+  const server = new TestServer();
+  await server.start();
+  cleanups.push(() => server.stop());
+  const room = await createRoom(server, createFork());
+  const groupId = newId();
+  const otherGroupId = newId();
+  const ids = { L: newId(), M: newId(), W1: newId(), W2: newId(), X: newId() };
+  const base = { runnerId: room.runnerId, provider: "claude" as const, model: "m", instructions: "" };
+  await appendAsMember(server, room.roomId, room.memberToken, [
+    draft("goal.created", { goalId: "prefill", parentId: room.rootGoalId, title: "Improve prefill", description: "" }),
+    draft("group.created", { groupId, goalId: "prefill", name: "prefill" }),
+    draft("group.created", { groupId: otherGroupId, goalId: room.rootGoalId, name: "other" }),
+    draft("agent.created", { ...base, agentId: ids.L, groupId, name: "leader", role: "leader", goalId: "prefill" }),
+    draft("agent.created", { ...base, agentId: ids.M, groupId, name: "monitor", role: "monitor", goalId: "prefill" }),
+    draft("agent.created", { ...base, agentId: ids.W1, groupId, name: "w1", role: "worker", goalId: "prefill" }),
+    draft("agent.created", { ...base, agentId: ids.W2, groupId, name: "w2", role: "worker", goalId: "prefill" }),
+    draft("agent.created", { ...base, agentId: ids.X, groupId: otherGroupId, name: "x", role: "worker", goalId: room.rootGoalId }),
+  ]);
+  const store = new LocalStore(join(tempDir("runner"), "runner.sqlite"));
+  cleanups.push(() => store.close());
+  const log = new MemoryLogger();
+  const link = new ServerLink({ serverUrl: server.base, roomId: room.roomId, token: room.runnerToken, store, log, onEvents: () => {} });
+  await link.start();
+  cleanups.push(() => link.close());
+  const mcp = new RoomMcp({ state: () => link.state!, emit: (d, asAgent) => link.emit(d, asAgent), now: Date.now });
+  await mcp.start();
+  cleanups.push(() => mcp.close());
+
+  async function client(agentId: string) {
+    const c = new Client({ name: "test", version: "0" });
+    await c.connect(new StreamableHTTPClientTransport(new URL(mcp.urlFor(agentId))));
+    cleanups.push(() => c.close());
+    const call = async (name: string, args: Record<string, unknown> = {}) => (await c.callTool({ name, arguments: args })) as CallResult;
+    const tools = async () => (await c.listTools()).tools.map((t) => t.name).sort();
+    return { call, tools };
+  }
+
+  const serverState = (): Promise<RoomState> => server.state(room.roomId, room.memberToken);
+  return { server, room, ids, mcp, link, log, store, client, serverState };
+}
+
+const textOf = (r: CallResult) => r.content[0]?.text ?? "";
+
+describe("Room MCP", () => {
+  it("exposes tools by role", async () => {
+    const { ids, client } = await setup();
+    const common = ["room_declare_direction", "room_get_context", "room_list_directions", "room_post_finding", "room_set_status"];
+    expect(await (await client(ids.W1)).tools()).toEqual(common);
+    expect(await (await client(ids.M)).tools()).toEqual([...common, "room_advise_leader", "room_group_digest"].sort());
+    expect(await (await client(ids.L)).tools()).toEqual([...common, "room_create_goal", "room_group_digest", "room_message", "room_pending_reviews", "room_review_post"].sort());
+  });
+
+  it("rejects requests without the agent's secret", async () => {
+    const { ids, mcp } = await setup();
+    const url = new URL(mcp.urlFor(ids.W1));
+    url.pathname = `/mcp/${ids.W1}/wrong-secret`;
+    expect((await fetch(url, { method: "POST" })).status).toBe(404);
+  });
+
+  it("records a worker's status, direction and findings as that agent", async () => {
+    const { ids, client, serverState, store } = await setup();
+    const w1 = await client(ids.W1);
+    const context = JSON.parse(textOf(await w1.call("room_get_context")));
+    expect(context.you).toEqual({ name: "w1", role: "worker", group: "prefill", goalPath: ["Make the demo better", "Improve prefill"] });
+
+    expect(textOf(await w1.call("room_set_status", { phase: "waiting_gpu", note: "queue 2" }))).toBe("status recorded");
+    expect(textOf(await w1.call("room_declare_direction", { summary: "batch tokenizer calls", hypothesis: "fewer round trips" }))).toBe("direction declared");
+    const posted = JSON.parse(textOf(await w1.call("room_post_finding", { kind: "finding", summary: "tokenizer is 30% of prefill", body: "profiled", proposeRoomVisible: true })));
+    expect(posted.visibility).toBe("group, pending room review");
+
+    await waitFor(() => store.outboxSize() === 0, "outbox to drain");
+    const state = await serverState();
+    expect(state.agents[ids.W1]?.phase).toMatchObject({ value: "waiting_gpu", note: "queue 2" });
+    const posts = Object.values(state.posts).filter((p) => p.agentId === ids.W1);
+    expect(posts.map((p) => [p.kind, p.summary, p.review.state]).sort()).toEqual([
+      ["direction", "batch tokenizer calls", "none"],
+      ["finding", "tokenizer is 30% of prefill", "pending"],
+    ]);
+    const w2 = await client(ids.W2);
+    const directions = await waitFor(async () => {
+      const listed = JSON.parse(textOf(await w2.call("room_list_directions")));
+      return listed.length === 1 ? listed : null;
+    }, "direction listing");
+    expect(directions[0]).toMatchObject({ by: "w1", summary: "batch tokenizer calls" });
+  });
+
+  it("lets the leader review posts, which then reach the whole room", async () => {
+    const { ids, client, link } = await setup();
+    const w1 = await client(ids.W1);
+    const leader = await client(ids.L);
+    const { postId } = JSON.parse(textOf(await w1.call("room_post_finding", { kind: "conclusion", summary: "use batch size 8", body: "", proposeRoomVisible: true })));
+    await waitFor(() => link.state!.posts[postId], "post in projection");
+
+    const pending = JSON.parse(textOf(await leader.call("room_pending_reviews")));
+    expect(pending.map((p: { id: string }) => p.id)).toEqual([postId]);
+    expect(textOf(await leader.call("room_review_post", { postId, decision: "approved", note: "convincing" }))).toBe("post approved");
+    await waitFor(() => link.state!.posts[postId]?.review.state === "approved", "review in projection");
+
+    const otherGroupContext = JSON.parse(textOf(await (await client(ids.X)).call("room_get_context")));
+    expect(otherGroupContext.roomConclusions.map((p: { summary: string }) => p.summary)).toEqual(["use batch size 8"]);
+    expect(otherGroupContext.groupFindings).toEqual([]);
+  });
+
+  it("surfaces authorization failures to the calling agent", async () => {
+    const { ids, client, link } = await setup();
+    const leader = await client(ids.L);
+    const own = JSON.parse(textOf(await leader.call("room_post_finding", { kind: "finding", summary: "mine", body: "", proposeRoomVisible: true })));
+    await waitFor(() => link.state!.posts[own.postId], "leader post in projection");
+    const selfReview = await leader.call("room_review_post", { postId: own.postId, decision: "approved" });
+    expect(selfReview.isError).toBe(true);
+    expect(textOf(selfReview)).toMatch(/parent leader/);
+
+    const crossGroup = await leader.call("room_message", { agent: "x", text: "hi" });
+    expect(crossGroup.isError).toBe(true);
+    expect(textOf(crossGroup)).toMatch(/leaders may message their group/);
+
+    const outside = await leader.call("room_create_goal", { parentGoalId: link.state!.room!.rootGoalId, title: "decode" });
+    expect(outside.isError).toBe(true);
+  });
+
+  it("routes leader messages and monitor advice", async () => {
+    const { ids, client, serverState, store } = await setup();
+    const leader = await client(ids.L);
+    const monitor = await client(ids.M);
+    expect(textOf(await leader.call("room_message", { agent: "w2", text: "switch to kv cache", delivery: "steer" }))).toBe("message sent to w2");
+    expect(textOf(await monitor.call("room_advise_leader", { text: "w1 looks stuck", severity: "high" }))).toBe("advice sent to leader");
+    const digest = JSON.parse(textOf(await monitor.call("room_group_digest")));
+    expect(digest.agents.map((a: { name: string }) => a.name).sort()).toEqual(["leader", "monitor", "w1", "w2"]);
+
+    await waitFor(() => store.outboxSize() === 0, "outbox to drain");
+    const messages = Object.values((await serverState()).messages);
+    expect(messages.map((m) => [m.from, m.toAgentId, m.delivery, m.text]).sort()).toEqual(
+      [
+        [{ kind: "agent", id: ids.L }, ids.W2, "steer", "switch to kv cache"],
+        [{ kind: "agent", id: ids.M }, ids.L, "steer", "w1 looks stuck"],
+      ].sort(),
+    );
+  });
+});

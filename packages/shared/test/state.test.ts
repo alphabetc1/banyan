@@ -239,6 +239,16 @@ describe("authorize", () => {
     expect(r.submit(BOB, draft("approval.decided", { approvalId: "a1", decision: "denied" }))).toBe("approval already decided");
   });
 
+  it("lets only the owning runner expire a pending approval", () => {
+    const r = seededRoom();
+    r.must(ALICE_RUNNER, draft("approval.requested", { approvalId: "a1", agentId: "W1", tool: "Bash", input: "ls" }));
+    expect(r.submit(BOB_RUNNER, draft("approval.expired", { approvalId: "a1", reason: "restart" }))).toBe("only the agent's runner may report this");
+    r.must(ALICE_RUNNER, draft("approval.expired", { approvalId: "a1", reason: "runner restarted" }));
+    expect(r.state.approvals.a1?.state).toBe("expired");
+    expect(pendingApprovalCount(r.state, "W1")).toBe(0);
+    expect(r.submit(ALICE, draft("approval.decided", { approvalId: "a1", decision: "allowed" }))).toBe("approval already decided");
+  });
+
   it("rejects duplicate ids", () => {
     const r = seededRoom();
     expect(r.submit(ALICE, draft("group.created", { groupId: "prefill-group", goalId: "perf", name: "dup" }))).toBe("group prefill-group already exists");
