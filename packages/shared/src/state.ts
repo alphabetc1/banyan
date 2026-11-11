@@ -61,7 +61,8 @@ export interface Phase {
 
 export interface Agent {
   id: string;
-  groupId: string;
+  // Null for a standalone agent.
+  groupId: string | null;
   runnerId: string;
   memberId: string;
   name: string;
@@ -96,7 +97,7 @@ export interface Worktree {
 export interface Post {
   id: string;
   agentId: string;
-  groupId: string;
+  groupId: string | null;
   goalId: string;
   kind: PostKind;
   summary: string;
@@ -229,7 +230,7 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         createdAt: e.ts,
         lastEventAt: e.ts,
       };
-      const group = state.groups[p.groupId];
+      const group = p.groupId === null ? undefined : state.groups[p.groupId];
       if (group && p.role === "leader") group.leaderAgentId = p.agentId;
       if (group && p.role === "monitor") group.monitorAgentId = p.agentId;
       break;
@@ -382,15 +383,21 @@ export function pendingApprovalCount(state: RoomState, agentId: string): number 
   return Object.values(state.approvals).filter((a) => a.agentId === agentId && a.state === "pending").length;
 }
 
+export function agentGroup(state: RoomState, agent: Agent): Group | undefined {
+  return agent.groupId === null ? undefined : state.groups[agent.groupId];
+}
+
 // Agents allowed to review a post: the leader of the author's group, or, when the author
-// is that leader, the leaders of groups on the nearest ancestor goal that has any.
+// is that leader, the leaders of groups on the nearest ancestor goal that has any. A
+// standalone author's post goes to the leaders on the nearest goal, starting with its own.
 // An empty result means only humans can review it.
 export function postReviewers(state: RoomState, post: Post): string[] {
-  const group = state.groups[post.groupId];
-  if (!group) return [];
-  if (group.leaderAgentId !== null && group.leaderAgentId !== post.agentId) return [group.leaderAgentId];
+  const group = post.groupId === null ? undefined : state.groups[post.groupId];
+  if (post.groupId !== null && !group) return [];
+  if (group && group.leaderAgentId !== null && group.leaderAgentId !== post.agentId) return [group.leaderAgentId];
   const seen = new Set<string>();
-  for (let goalId = state.goals[group.goalId]?.parentId ?? null; goalId !== null && !seen.has(goalId); goalId = state.goals[goalId]?.parentId ?? null) {
+  const firstGoalId = group ? (state.goals[group.goalId]?.parentId ?? null) : post.goalId;
+  for (let goalId = firstGoalId; goalId !== null && !seen.has(goalId); goalId = state.goals[goalId]?.parentId ?? null) {
     seen.add(goalId);
     const leaders = Object.values(state.groups)
       .filter((g) => g.goalId === goalId && g.leaderAgentId !== null)

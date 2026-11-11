@@ -6,3 +6,5 @@ dist/
 spikes/codex-schema/
 test-results/
 playwright-report/
+# Desktop client app directory and installers
+packages/desktop/build/

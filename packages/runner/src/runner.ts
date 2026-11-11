@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { EventDraft } from "@banyan/shared";
+import { AgentProcesses, killLeftoverAgentProcesses } from "./agent-processes.ts";
 import { ServerLink } from "./link.ts";
 import { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
@@ -31,7 +32,10 @@ export class Runner {
   readonly supervisor: Supervisor;
   private providers: { claude: ClaudeProvider; codex: CodexProvider };
 
-  constructor(config: RunnerConfig, log: Logger) {
+  constructor(
+    private readonly config: RunnerConfig,
+    private readonly log: Logger,
+  ) {
     mkdirSync(config.roomDir, { recursive: true });
     this.store = new LocalStore(join(config.roomDir, "runner.sqlite"));
     let supervisor: Supervisor | null = null;
@@ -49,7 +53,8 @@ export class Runner {
     };
     const emit = (drafts: EventDraft[], asAgent: string | null = null) => this.link.emit(drafts, asAgent);
     this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message) });
-    this.providers = { claude: new ClaudeProvider(config.claudePermissionMode), codex: new CodexProvider(log) };
+    const processes = new AgentProcesses(config.roomDir);
+    this.providers = { claude: new ClaudeProvider(processes, config.claudePermissionMode), codex: new CodexProvider(log, processes) };
     supervisor = new Supervisor({
       runnerId: config.runnerId,
       roomDir: config.roomDir,
@@ -65,6 +70,9 @@ export class Runner {
   }
 
   async start(): Promise<void> {
+    // Agents of a previous runner process that was killed outright must not keep working.
+    const leftovers = await killLeftoverAgentProcesses(this.config.roomDir);
+    if (leftovers.length > 0) this.log.warn(`ended agent process(es) left by a previous runner: ${leftovers.join(", ")}`);
     await this.mcp.start();
     await this.link.start();
     await this.supervisor.start();

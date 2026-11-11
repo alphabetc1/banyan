@@ -91,6 +91,7 @@ test("creates a room, invites a second person who joins through the link", async
   await page.getByRole("button", { name: "Invite" }).click();
   const link = await page.getByTestId("invite-link").inputValue();
   expect(link).toContain(`/join/${roomId}#invite=`);
+  await expect(page.getByTestId("install-command")).toHaveValue(`curl -fsSL ${base}/install.sh | bash -s ${base}`);
   await expect(page.getByTestId("runner-command")).toHaveValue(new RegExp(`banyan-runner register --server ${base} --room ${roomId} --member-token `));
 
   const other = await browser.newContext();
@@ -101,6 +102,8 @@ test("creates a room, invites a second person who joins through the link", async
   await guest.goto(link);
   await guest.evaluate(() => localStorage.setItem("banyan.lang", "en"));
   await guest.reload();
+  // A browser guest is offered the desktop client right on the join page.
+  await expect(guest.getByTestId("install-command")).toHaveValue(`curl -fsSL ${base}/install.sh | bash -s ${base}`);
   await guest.getByLabel("Your name").fill("Bob");
   await guest.getByRole("button", { name: "Join" }).click();
   await guest.waitForURL(new RegExp(`/rooms/${roomId}$`));
@@ -145,6 +148,41 @@ test("builds the goal tree and group from the UI, then shows live agent state an
   // Dropping the runner connection turns the card offline again without a reload.
   r.ws.close();
   await expect(card.locator(".dot")).toHaveClass(/offline/);
+});
+
+test("creates standalone agents without any group and shows them on their goals", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  await page.reload();
+
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByLabel("Group")).toHaveValue("");
+  await expect(page.getByLabel("Role").locator("option[value=leader]")).toBeDisabled();
+  await expect(page.getByLabel("Role").locator("option[value=monitor]")).toBeDisabled();
+  await page.getByLabel("Agent name").fill("solo");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByTestId("standalone-agents").getByTestId("agent-card-solo")).toBeVisible();
+  await expect(page.getByText("No group or agent works on this goal yet.")).toHaveCount(0);
+
+  const state = await serverState(room.roomId, room.token);
+  const agent = Object.values(state.agents).find((a) => a.name === "solo")!;
+  expect(agent).toMatchObject({ groupId: null, role: "worker", goalId: room.rootGoalId, runnerId: runner.runnerId });
+
+  // A standalone agent on a sub-goal also shows under the parent goal, marked with its own goal.
+  await page.getByRole("button", { name: "New sub-goal" }).click();
+  await page.getByLabel("Title").fill("Faster decode");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByLabel("Agent name").fill("decode-solo");
+  await page.getByLabel("Agent goal").selectOption({ label: "Faster decode" });
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByTestId("agent-card-decode-solo")).toContainText("→ Faster decode");
+  await page.getByText("Faster decode").first().click();
+  await expect(page.getByTestId("standalone-agents").getByTestId("agent-card-decode-solo")).toBeVisible();
+  await expect(page.getByTestId("agent-card-solo")).toHaveCount(0);
+
+  await page.getByTestId("agent-card-decode-solo").click();
+  await expect(page.locator(".facts")).toContainText("Standalone");
 });
 
 test("approves an agent's request, sends it a message and reads its live transcript", async ({ page }) => {

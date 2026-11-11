@@ -4,7 +4,7 @@ import type { Agent, RoomState } from "@banyan/shared";
 import { StatusDot, timeAgo, useNow } from "../components/common.tsx";
 import { NewAgentDialog, NewGoalDialog, NewGroupDialog } from "../components/dialogs.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, groupsOnGoal, type AttentionItem, type GoalNode } from "../derive.ts";
+import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type AttentionItem, type GoalNode } from "../derive.ts";
 import { LanguageContext, useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -41,7 +41,8 @@ function GoalTreeView({ node, selected, onSelect, depth = 0 }: { node: GoalNode;
   );
 }
 
-function AgentCard({ state, agent, online, now }: { state: RoomState; agent: Agent; online: string[]; now: number }) {
+// homeGoalId is the goal of the section showing the card; the agent's own goal is shown when it differs.
+function AgentCard({ state, agent, homeGoalId, online, now }: { state: RoomState; agent: Agent; homeGoalId: string; online: string[]; now: number }) {
   const t = useT();
   const reasonText = useReasonText();
   const status = agentStatus(state, agent, online, now);
@@ -60,7 +61,7 @@ function AgentCard({ state, agent, online, now }: { state: RoomState; agent: Age
         <span className="pill">{agent.phase?.value ?? t("agent.noPhase")}</span>
         {agent.process === "starting" ? <span className="pill">{t("process.starting")}</span> : <span className="pill">{t(`activity.${agent.activity}`)}</span>}
       </div>
-      {goal && agent.goalId !== state.groups[agent.groupId]?.goalId && <span className="faint">→ {goal.title}</span>}
+      {goal && agent.goalId !== homeGoalId && <span className="faint">→ {goal.title}</span>}
       {status.reasons.length > 0 && <span className="reasons">{status.reasons.map(reasonText).join(" · ")}</span>}
     </a>
   );
@@ -114,9 +115,8 @@ export function OverviewPage() {
   const [dialog, setDialog] = useState<null | "goal" | "group" | "agent">(null);
   if (!tree) return null;
   const goal = state.goals[selected] ?? state.goals[state.room!.rootGoalId]!;
-  // Groups working directly on the goal can receive new agents; the subtree is shown below them.
-  const ownGroups = groupsOnGoal(state, goal.id);
   const groups = groupsInSubtree(state, goal.id);
+  const standalone = standaloneAgentsInSubtree(state, goal.id);
 
   return (
     <div className="overview">
@@ -135,11 +135,23 @@ export function OverviewPage() {
           </div>
           <button onClick={() => setDialog("goal")}>{t("overview.newGoal")}</button>
           <button onClick={() => setDialog("group")}>{t("overview.newGroup")}</button>
-          <button className="primary" onClick={() => setDialog("agent")} disabled={ownGroups.length === 0}>
+          <button className="primary" onClick={() => setDialog("agent")}>
             {t("overview.newAgent")}
           </button>
         </div>
-        {groups.length === 0 && <div className="panel faint">{t("overview.noGroups")}</div>}
+        {groups.length === 0 && standalone.length === 0 && <div className="panel faint">{t("overview.noGroups")}</div>}
+        {standalone.length > 0 && (
+          <div className="group-section" data-testid="standalone-agents">
+            <header>
+              <h3>{t("overview.standalone")}</h3>
+            </header>
+            <div className="cards">
+              {standalone.map((a) => (
+                <AgentCard key={a.id} state={state} agent={a} homeGoalId={goal.id} online={store.onlineRunnerIds} now={now} />
+              ))}
+            </div>
+          </div>
+        )}
         {groups.map((g) => (
           <div className="group-section" key={g.id} data-testid={`group-${g.name}`}>
             <header>
@@ -148,7 +160,7 @@ export function OverviewPage() {
             </header>
             <div className="cards">
               {groupAgents(state, g.id).map((a) => (
-                <AgentCard key={a.id} state={state} agent={a} online={store.onlineRunnerIds} now={now} />
+                <AgentCard key={a.id} state={state} agent={a} homeGoalId={g.goalId} online={store.onlineRunnerIds} now={now} />
               ))}
             </div>
           </div>

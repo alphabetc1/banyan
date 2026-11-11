@@ -210,6 +210,59 @@ describe("authorize", () => {
     r.must(BOB, draft("post.reviewed", { postId: "pr", decision: "approved" }));
   });
 
+  it("allows standalone workers on any goal but keeps leaders and monitors in groups", () => {
+    const r = seededRoom();
+    const base = { groupId: null, runnerId: "runner-a", provider: "claude" as const, model: "default", instructions: "", goalId: "tokenizer" };
+    r.must(ALICE, draft("agent.created", { ...base, agentId: "S", name: "solo", role: "worker" }));
+    expect(r.state.agents.S).toMatchObject({ groupId: null, goalId: "tokenizer", memberId: "alice" });
+    expect(r.submit(ALICE, draft("agent.created", { ...base, agentId: "SL", name: "solo leader", role: "leader" }))).toBe(
+      "only workers may be standalone; leaders and monitors belong to a group",
+    );
+    expect(r.submit(ALICE, draft("agent.created", { ...base, agentId: "SM", name: "solo monitor", role: "monitor" }))).toBe(
+      "only workers may be standalone; leaders and monitors belong to a group",
+    );
+    expect(r.submit(ALICE, draft("agent.created", { ...base, agentId: "SX", name: "lost", role: "worker", goalId: "nowhere" }))).toBe("unknown goal nowhere");
+    // Standalone agents join no group's roster.
+    expect(r.state.groups["prefill-group"]).toMatchObject({ leaderAgentId: "L", monitorAgentId: "M" });
+  });
+
+  it("sends a standalone agent's post to the leaders on its goal path, starting with its own goal", () => {
+    const r = seededRoom();
+    const base = { groupId: null, runnerId: "runner-a", provider: "claude" as const, model: "default", instructions: "", role: "worker" as const };
+    r.must(ALICE, draft("agent.created", { ...base, agentId: "SP", name: "on prefill", goalId: "prefill" }));
+    r.must(ALICE, draft("agent.created", { ...base, agentId: "ST", name: "on tokenizer", goalId: "tokenizer" }));
+    const post = (postId: string, agentId: string) => draft("post.created", { postId, agentId, kind: "finding", summary: "s", body: "", evidence: [], proposeRoomVisible: true });
+    r.must(agent("SP"), post("sp", "SP"));
+    r.must(agent("ST"), post("st", "ST"));
+    expect(r.state.posts.sp).toMatchObject({ groupId: null, goalId: "prefill", review: { state: "pending" } });
+    // The prefill group leads its own goal; the tokenizer goal has no group, so its parent's leader reviews.
+    expect(postReviewers(r.state, r.state.posts.sp!)).toEqual(["L"]);
+    expect(postReviewers(r.state, r.state.posts.st!)).toEqual(["L"]);
+    expect(r.submit(agent("R"), draft("post.reviewed", { postId: "sp", decision: "approved" }))).toMatch(/only the post's group leader/);
+    r.must(agent("L"), draft("post.reviewed", { postId: "sp", decision: "approved" }));
+  });
+
+  it("leaves a standalone agent's post to humans when no goal on its path has a leader", () => {
+    const r = new Room();
+    r.must(SYSTEM, draft("room.created", { name: "solo", repoUrl: "u", baseBranch: "main", rootGoalId: "root", rootGoalTitle: "root", rootGoalDescription: "" }));
+    r.must(SYSTEM, draft("member.joined", { memberId: "alice", displayName: "Alice", role: "owner" }));
+    r.must(SYSTEM, draft("runner.registered", { runnerId: "runner-a", memberId: "alice", hostname: "mac" }));
+    r.must(ALICE, draft("agent.created", { agentId: "S", groupId: null, runnerId: "runner-a", name: "solo", role: "worker", provider: "codex", model: "default", goalId: "root", instructions: "" }));
+    r.must(agent("S"), draft("post.created", { postId: "p", agentId: "S", kind: "finding", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    expect(postReviewers(r.state, r.state.posts.p!)).toEqual([]);
+    r.must(ALICE, draft("post.reviewed", { postId: "p", decision: "approved" }));
+  });
+
+  it("does not let a standalone worker message other agents", () => {
+    const r = seededRoom();
+    r.must(ALICE, draft("agent.created", { agentId: "S", groupId: null, runnerId: "runner-a", name: "solo", role: "worker", provider: "claude", model: "default", goalId: "perf", instructions: "" }));
+    expect(r.submit(agent("S"), draft("message.sent", { messageId: "m", toAgentId: "W1", text: "hi", delivery: "fyi" }))).toBe(
+      "leaders may message their group; monitors may only message their leader",
+    );
+    // A person may still message it.
+    r.must(ALICE, draft("message.sent", { messageId: "m2", toAgentId: "S", text: "hi", delivery: "fyi" }));
+  });
+
   it("lets leaders create goals only inside their subtree", () => {
     const r = seededRoom();
     r.must(agent("L"), draft("goal.created", { goalId: "kv", parentId: "prefill", title: "kv", description: "" }));

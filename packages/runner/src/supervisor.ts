@@ -2,7 +2,7 @@
 // provider callbacks into room events and room events into agent input.
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
+import { agentGroup, draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
 import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
@@ -10,7 +10,6 @@ import type { AgentProvider, AgentSession } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
 import { commitAll, createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
 
-const TRANSCRIPT_FLUSH_MS = 1000;
 const TRANSCRIPT_BATCH_MAX = 200;
 const CRASH_RESTART_DELAY_MS = 5000;
 const CRASH_RESTARTS_MAX = 3;
@@ -40,7 +39,6 @@ interface Running {
   earlyExit: { crashed: boolean; detail: string } | null;
   activity: "working" | "idle" | null;
   sessionId: string | null;
-  transcript: TranscriptEntry[];
 }
 
 export class Supervisor {
@@ -74,7 +72,6 @@ export class Supervisor {
     for (const r of this.opts.store.unsentApprovalRequests()) stale.add(r.approvalId);
     this.opts.emit([...stale].map((approvalId) => draft("approval.expired", { approvalId, reason: "runner restarted" })));
     await Promise.all(this.mine(state).map((a) => this.ensureRunning(a.id)));
-    this.timers.push(setInterval(() => this.flushTranscripts(), TRANSCRIPT_FLUSH_MS));
     if (this.opts.monitorIntervalMs) this.timers.push(setInterval(() => this.nudgeMonitors(), this.opts.monitorIntervalMs));
   }
 
@@ -183,7 +180,8 @@ export class Supervisor {
     const state = this.opts.state();
     let markExited!: () => void;
     const exited = new Promise<void>((resolve) => (markExited = resolve));
-    const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null, transcript: [] };
+    const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null };
+    this.appendTranscript(agentId, [{ kind: "system", text: resumeSessionId ? "resuming session" : "starting session", ts: Date.now() }]);
     const provider = this.opts.providers[agent.provider];
     run.session = provider.start(
       {
@@ -206,7 +204,7 @@ export class Supervisor {
           run.activity = activity;
           this.opts.emit([draft("agent.activity_changed", { agentId, activity })]);
         },
-        onTranscript: (entries) => run.transcript.push(...entries),
+        onTranscript: (entries) => this.appendTranscript(agentId, entries),
         requestApproval: ({ tool, input }) => {
           const approvalId = newId();
           this.openApprovals.set(approvalId, agentId);
@@ -242,12 +240,10 @@ export class Supervisor {
       this.onExit(agentId, run, run.earlyExit.crashed, run.earlyExit.detail);
       return;
     }
-    run.transcript.unshift({ kind: "system", text: resumeSessionId ? "session resumed by runner" : "session started by runner", ts: Date.now() });
     this.deliverPendingMessages(agentId);
   }
 
   private onExit(agentId: string, run: Running, crashed: boolean, detail: string): void {
-    this.flushTranscript(agentId, run);
     if (this.running.get(agentId) === run) this.running.delete(agentId);
     // Pending approvals of the exited session can never be applied.
     const stale = new Set(Object.values(this.opts.state().approvals).filter((a) => a.agentId === agentId && a.state === "pending").map((a) => a.id));
@@ -297,18 +293,15 @@ export class Supervisor {
     } catch (e) {
       const detail = (e as Error).message;
       this.opts.log.warn(`agent ${agentId}: worktree sync failed: ${detail}`);
-      this.running.get(agentId)?.transcript.push({ kind: "system", text: `worktree sync failed: ${detail}`, ts: Date.now() });
+      this.appendTranscript(agentId, [{ kind: "system", text: `worktree sync failed: ${detail}`, ts: Date.now() }]);
     }
   }
 
-  private flushTranscript(agentId: string, run: Running): void {
-    while (run.transcript.length > 0) {
-      this.opts.emit([draft("transcript.appended", { agentId, entries: run.transcript.splice(0, TRANSCRIPT_BATCH_MAX) })]);
+  // Written to the outbox right away, so a runner killed mid-turn loses no history.
+  private appendTranscript(agentId: string, entries: TranscriptEntry[]): void {
+    for (let i = 0; i < entries.length; i += TRANSCRIPT_BATCH_MAX) {
+      this.opts.emit([draft("transcript.appended", { agentId, entries: entries.slice(i, i + TRANSCRIPT_BATCH_MAX) })]);
     }
-  }
-
-  private flushTranscripts(): void {
-    for (const [agentId, run] of this.running) this.flushTranscript(agentId, run);
   }
 
   private deliverMessage(state: RoomState, messageId: string): void {
@@ -349,7 +342,7 @@ export class Supervisor {
   // message would otherwise trigger.
   private notifyLeader(state: RoomState, agentId: string, phase: string, note: string | null): void {
     const agent = state.agents[agentId];
-    const leaderId = agent ? state.groups[agent.groupId]?.leaderAgentId : null;
+    const leaderId = agent ? agentGroup(state, agent)?.leaderAgentId : null;
     if (!agent || agent.role !== "worker" || !leaderId) return;
     this.running.get(leaderId)?.session.send(workerPhaseMessage(agent.name, phase, note), "fyi");
   }

@@ -53,6 +53,12 @@ runner 会使用本机已经登录好的 `claude` 和 `codex` CLI，以及本机
 
 恢复数据：先 `uninstall-server`，把某个备份复制成 `server/banyan.sqlite`，再 `install-server`。
 
+## room server 地址怎么填
+
+- 自己在这台 Mac 上用：`http://127.0.0.1:7700`。
+- tailnet 里的同事：先按下一节执行 `tailscale serve`，地址就是 `https://<本机 MagicDNS 名>`（查名字：`tailscale status --json | grep DNSName`）。
+- 同事用邀请对话框里的一键安装命令装客户端，地址会自动填好，不需要手动输入。安装包要先在这台机器上执行 `pnpm --filter @banyan/desktop dist` 打出来，server 会直接提供下载，不需要重启。
+
 ## 让同事通过 tailnet 访问（可选）
 
 server 只监听本机。如果要让 tailnet 里的同事访问，用 tailscale 转发并自动签 HTTPS 证书，不需要开放任何端口：

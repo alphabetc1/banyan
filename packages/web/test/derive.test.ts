@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, authorize, draft, emptyRoomState, type Actor, type EventDraft, type RoomState } from "@banyan/shared";
-import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, latestPost, postColumn } from "../src/derive.ts";
+import { agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
 import { MESSAGES, reasonText } from "../src/i18n.ts";
 
 const NOW = 2_000_000_000_000;
@@ -85,6 +85,41 @@ describe("derive", () => {
       { kind: "unhealthy", agentId: "m", reasons: [{ code: "crashed", detail: null }] },
       { kind: "review", postId: "pl", agentId: "l", summary: "leader conclusion" },
     ]);
+  });
+
+  it("keeps only attention items about agents on the member's own runners", () => {
+    const s = room();
+    const steps: [Actor, EventDraft][] = [
+      [SYSTEM, draft("member.joined", { memberId: "m2", displayName: "Ada", role: "member" })],
+      [SYSTEM, draft("runner.registered", { runnerId: "r2", memberId: "m2", hostname: "linux" })],
+      [{ kind: "member", id: "m2" }, draft("agent.created", { ...agentBase, runnerId: "r2", agentId: "x", groupId: "g", name: "x", role: "worker", goalId: "tok" })],
+    ];
+    for (const [actor, d] of steps) applyEvent(s, { ...d, seq: s.lastSeq + 1, roomId: "room", ts: NOW, actor });
+    const mine = { kind: "approval" as const, approvalId: "a1", agentId: "w", tool: "Bash", since: NOW };
+    const theirs = { kind: "unhealthy" as const, agentId: "x", reasons: [] };
+    const unknown = { kind: "review" as const, postId: "p", agentId: "gone", summary: "" };
+    expect(ownAttention(s, "m1", [mine, theirs, unknown])).toEqual([mine]);
+    expect(ownAttention(s, "m2", [mine, theirs, unknown])).toEqual([theirs]);
+  });
+
+  it("lists standalone agents in a goal's subtree, oldest first", () => {
+    const s = room();
+    const solo = (agentId: string, goalId: string, ts: number) => {
+      const d = draft("agent.created", { ...agentBase, agentId, groupId: null, name: agentId, role: "worker", goalId });
+      applyEvent(s, { ...d, seq: s.lastSeq + 1, roomId: "room", ts, actor: OWNER });
+    };
+    solo("s-tok", "tok", NOW + 2);
+    solo("s-root", "root", NOW + 1);
+    solo("s-decode", "decode", NOW + 3);
+    expect(standaloneAgentsInSubtree(s, "root").map((a) => a.id)).toEqual(["s-root", "s-tok", "s-decode"]);
+    expect(standaloneAgentsInSubtree(s, "prefill").map((a) => a.id)).toEqual(["s-tok"]);
+    expect(standaloneAgentsInSubtree(s, "decode").map((a) => a.id)).toEqual(["s-decode"]);
+  });
+
+  it("keys attention items by what they are about", () => {
+    expect(attentionKey({ kind: "approval", approvalId: "a1", agentId: "w", tool: "Bash", since: NOW })).toBe("approval:a1");
+    expect(attentionKey({ kind: "unhealthy", agentId: "w", reasons: [] })).toBe("unhealthy:w");
+    expect(attentionKey({ kind: "review", postId: "p1", agentId: "w", summary: "" })).toBe("review:p1");
   });
 
   it("places posts into findings columns", () => {

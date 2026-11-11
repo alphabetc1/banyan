@@ -1,0 +1,23 @@
+{
+  "name": "@banyan/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --exclude 'test/**/*.e2e.test.ts'",
+    "build": "node scripts/build.mjs",
+    "start": "pnpm build && electron build/app-$(node -p process.arch)",
+    "dist": "node scripts/dist.mjs",
+    "test:e2e": "pnpm --filter @banyan/web build && node scripts/dist.mjs && playwright test"
+  },
+  "devDependencies": {
+    "@banyan/runner": "workspace:*",
+    "@banyan/server": "workspace:*",
+    "@banyan/shared": "workspace:*",
+    "@playwright/test": "^1.65.0",
+    "electron": "45.3.0",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.28.2"
+  }
+}

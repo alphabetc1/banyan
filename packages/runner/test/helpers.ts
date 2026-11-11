@@ -30,10 +30,14 @@ export function createFork(): string {
 export class TestServer {
   app!: Awaited<ReturnType<typeof buildApp>>;
   base = "";
-  constructor(readonly dbPath = join(tempDir("server"), "banyan.sqlite")) {}
+  constructor(
+    readonly dbPath = join(tempDir("server"), "banyan.sqlite"),
+    // Built web UI to serve, for tests that drive the UI.
+    readonly webDir?: string,
+  ) {}
 
   async start(port = 0): Promise<void> {
-    this.app = await buildApp({ dbPath: this.dbPath });
+    this.app = await buildApp({ dbPath: this.dbPath, ...(this.webDir ? { webDir: this.webDir } : {}) });
     this.base = await this.app.listen({ host: "127.0.0.1", port });
   }
 

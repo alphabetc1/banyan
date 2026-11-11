@@ -76,7 +76,8 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant("group.created", z.object({ groupId: Id, goalId: Id, name: ShortText })),
   variant(
     "agent.created",
-    z.object({ agentId: Id, groupId: Id, runnerId: Id, name: ShortText, role: AgentRole, provider: Provider, model: ShortText, goalId: Id, instructions: LongText }),
+    // groupId is null for a standalone agent, which works on its goal outside any group.
+    z.object({ agentId: Id, groupId: Id.nullable(), runnerId: Id, name: ShortText, role: AgentRole, provider: Provider, model: ShortText, goalId: Id, instructions: LongText }),
   ),
   variant("agent.session_bound", z.object({ agentId: Id, providerSessionId: Id })),
   variant("agent.process_changed", z.object({ agentId: Id, process: ProcessState, detail: LongText.optional() })),

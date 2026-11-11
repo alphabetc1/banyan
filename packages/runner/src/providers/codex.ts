@@ -1,6 +1,6 @@
 // Codex agents through `codex app-server`: one JSON-RPC process hosts every Codex thread
 // of this runner; notifications and server requests are routed to sessions by threadId.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Delivery, TranscriptEntry } from "@banyan/shared";
 import type { AskForApproval } from "./codex-protocol/v2/AskForApproval";
@@ -10,6 +10,7 @@ import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { ThreadStatus } from "./codex-protocol/v2/ThreadStatus";
 import type { TurnStatus } from "./codex-protocol/v2/TurnStatus";
 import type { UserInput } from "./codex-protocol/v2/UserInput";
+import type { AgentProcesses } from "../agent-processes.ts";
 import type { Logger } from "../logger.ts";
 import { clip, DEFAULT_MODEL, type AgentProvider, type AgentSession, type SessionCallbacks, type SessionSpec } from "./types.ts";
 
@@ -28,8 +29,9 @@ class AppServerProcess {
     private onNotification: (method: string, params: Json) => void,
     private onServerRequest: (method: string, params: Json) => Promise<Json>,
     log: Logger,
+    processes: AgentProcesses,
   ) {
-    this.proc = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = processes.spawn("codex", ["app-server"]);
     this.exited = new Promise((resolve) => {
       this.proc.on("exit", (code, signal) => resolve(`codex app-server exited (code ${code}, signal ${signal})`));
       this.proc.on("error", (e) => resolve(`codex app-server failed: ${e.message}`));
@@ -232,6 +234,7 @@ export class CodexProvider implements AgentProvider {
 
   constructor(
     private log: Logger,
+    private processes: AgentProcesses,
     readonly approvalPolicy: AskForApproval = "on-request",
     readonly sandbox: SandboxMode = "workspace-write",
   ) {}
@@ -244,6 +247,7 @@ export class CodexProvider implements AgentProvider {
       (method, params) => this.route(method, params),
       (method, params) => this.answer(method, params),
       this.log,
+      this.processes,
     );
     this.proc = proc;
     this.initialized = proc

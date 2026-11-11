@@ -1,0 +1,17 @@
+# Packages the app directory produced by scripts/build.mjs into installers under build/dist.
+appId: local.banyan.desktop
+productName: Banyan
+# The app directory per architecture is passed by scripts/dist.mjs.
+directories:
+  output: build/dist
+artifactName: ${productName}-${arch}.${ext}
+# Unpacked so the Claude SDK's bundled claude executable and better-sqlite3 load from real paths.
+asar: false
+# Native dependencies are Node-API prebuilds; nothing to rebuild.
+npmRebuild: false
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  # Unsigned for internal use; the room server's install script installs it without the
+  # quarantine flag, so Gatekeeper does not block the first launch.
+  identity: null

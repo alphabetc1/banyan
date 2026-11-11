@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { draft, isGoalWithin, newId, type Agent } from "@banyan/shared";
 import { createInvite } from "../api.ts";
 import { useRoomStore } from "../contexts.ts";
+import { installCommand } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 import { Dialog, useAction } from "./common.tsx";
 
@@ -94,14 +95,16 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
     instructions: "",
   });
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
-  const group = state.groups[form.groupId];
-  const goalChoices = group ? Object.values(state.goals).filter((g) => isGoalWithin(state, g.id, group.goalId)) : [];
-  const takenRoles = new Set([group?.leaderAgentId ? "leader" : "", group?.monitorAgentId ? "monitor" : ""]);
+  // An empty groupId means a standalone agent, which can only be a worker.
+  const group = form.groupId ? state.groups[form.groupId] : undefined;
+  const goalChoices = Object.values(state.goals).filter((g) => isGoalWithin(state, g.id, group?.goalId ?? goalId));
+  const takenRoles = new Set([!group || group.leaderAgentId ? "leader" : "", !group || group.monitorAgentId ? "monitor" : ""]);
+  const setGroup = (e: { target: { value: string } }) => setForm({ ...form, groupId: e.target.value, ...(e.target.value ? {} : { role: "worker" as const }) });
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const { agentGoalId, ...rest } = form;
-    void action.run(() => store.append([draft("agent.created", { ...rest, agentId: newId(), goalId: agentGoalId })])).then((ok) => ok && onClose());
+    const { agentGoalId, groupId, ...rest } = form;
+    void action.run(() => store.append([draft("agent.created", { ...rest, agentId: newId(), groupId: groupId || null, goalId: agentGoalId })])).then((ok) => ok && onClose());
   };
   return (
     <Dialog title={t("overview.newAgent")} onClose={onClose}>
@@ -110,7 +113,8 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
         <div className="row">
           <label style={{ flex: 1 }}>
             {t("agent.group")}
-            <select value={form.groupId} onChange={set("groupId")}>
+            <select value={form.groupId} onChange={setGroup}>
+              <option value="">{t("dialog.noGroup")}</option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
@@ -176,7 +180,7 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
   );
 }
 
-function CopyField({ value, testId }: { value: string; testId: string }) {
+export function CopyField({ value, testId }: { value: string; testId: string }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   return (
@@ -212,6 +216,8 @@ export function InviteDialog({ onClose }: { onClose: () => void }) {
       <span className="muted">{t("invite.link")}</span>
       {inviteToken && <CopyField testId="invite-link" value={`${origin}/join/${store.roomId}#invite=${inviteToken}`} />}
       {action.error && <span className="error">{action.error}</span>}
+      <span className="muted">{t("invite.desktop")}</span>
+      <CopyField testId="install-command" value={installCommand(origin)} />
       <span className="muted">{t("invite.runner")}</span>
       <CopyField testId="runner-command" value={`banyan-runner register --server ${origin} --room ${store.roomId} --member-token ${store.token}`} />
       <div className="row" style={{ justifyContent: "flex-end" }}>

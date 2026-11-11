@@ -26,7 +26,7 @@ async function setup() {
   const room = await createRoom(server, createFork());
   const groupId = newId();
   const otherGroupId = newId();
-  const ids = { L: newId(), M: newId(), W1: newId(), W2: newId(), X: newId() };
+  const ids = { L: newId(), M: newId(), W1: newId(), W2: newId(), X: newId(), S1: newId(), S2: newId() };
   const base = { runnerId: room.runnerId, provider: "claude" as const, model: "m", instructions: "" };
   await appendAsMember(server, room.roomId, room.memberToken, [
     draft("goal.created", { goalId: "prefill", parentId: room.rootGoalId, title: "Improve prefill", description: "" }),
@@ -37,6 +37,8 @@ async function setup() {
     draft("agent.created", { ...base, agentId: ids.W1, groupId, name: "w1", role: "worker", goalId: "prefill" }),
     draft("agent.created", { ...base, agentId: ids.W2, groupId, name: "w2", role: "worker", goalId: "prefill" }),
     draft("agent.created", { ...base, agentId: ids.X, groupId: otherGroupId, name: "x", role: "worker", goalId: room.rootGoalId }),
+    draft("agent.created", { ...base, agentId: ids.S1, groupId: null, name: "s1", role: "worker", goalId: "prefill" }),
+    draft("agent.created", { ...base, agentId: ids.S2, groupId: null, name: "s2", role: "worker", goalId: "prefill" }),
   ]);
   const store = new LocalStore(join(tempDir("runner"), "runner.sqlite"));
   cleanups.push(() => store.close());
@@ -81,6 +83,7 @@ describe("Room MCP", () => {
     expect(await (await client(ids.W1)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.W2)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.X)).tools()).toEqual([...common, "room_commit"].sort());
+    expect(await (await client(ids.S1)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.M)).tools()).toEqual([...common, "room_advise_leader", "room_group_digest"].sort());
     expect(await (await client(ids.L)).tools()).toEqual([...common, "room_create_goal", "room_group_digest", "room_message", "room_pending_reviews", "room_review_post"].sort());
   });
@@ -147,7 +150,33 @@ describe("Room MCP", () => {
 
     const otherGroupContext = JSON.parse(textOf(await (await client(ids.X)).call("room_get_context")));
     expect(otherGroupContext.roomConclusions.map((p: { summary: string }) => p.summary)).toEqual(["use batch size 8"]);
-    expect(otherGroupContext.groupFindings).toEqual([]);
+    expect(otherGroupContext.peerFindings).toEqual([]);
+  });
+
+  it("shows a standalone agent the work of the agents on its goal", async () => {
+    const { ids, client, link } = await setup();
+    const s1 = await client(ids.S1);
+    const s2 = await client(ids.S2);
+    const w1 = await client(ids.W1);
+    const x = await client(ids.X);
+    await s2.call("room_declare_direction", { summary: "cache tokenizer output", hypothesis: "repeat prompts" });
+    const { postId: soloPost } = JSON.parse(textOf(await s2.call("room_post_finding", { kind: "finding", summary: "solo finding", body: "", proposeRoomVisible: false })));
+    await w1.call("room_post_finding", { kind: "finding", summary: "group finding", body: "", proposeRoomVisible: false });
+    await x.call("room_post_finding", { kind: "finding", summary: "other goal finding", body: "", proposeRoomVisible: false });
+    await waitFor(() => Object.keys(link.state!.posts).length === 4, "posts in projection");
+    expect(link.state!.posts[soloPost]).toMatchObject({ groupId: null, goalId: "prefill" });
+
+    const context = JSON.parse(textOf(await s1.call("room_get_context")));
+    expect(context.you).toMatchObject({ name: "s1", group: null, goalPath: ["Make the demo better", "Improve prefill"] });
+    expect(context.peers).toBe("agents on your goal");
+    expect(context.peerFindings.map((p: { summary: string }) => p.summary).sort()).toEqual(["group finding", "solo finding"]);
+    expect(context.peerDirections.map((p: { summary: string }) => p.summary)).toEqual(["cache tokenizer output"]);
+    // Directions default to the standalone agent's own goal.
+    expect(JSON.parse(textOf(await s1.call("room_list_directions"))).map((p: { summary: string }) => p.summary)).toEqual(["cache tokenizer output"]);
+    // A group member's peers stay its group.
+    const groupContext = JSON.parse(textOf(await w1.call("room_get_context")));
+    expect(groupContext.peers).toBe("your group");
+    expect(groupContext.peerFindings.map((p: { summary: string }) => p.summary)).toEqual(["group finding"]);
   });
 
   it("surfaces authorization failures to the calling agent", async () => {

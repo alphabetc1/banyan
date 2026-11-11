@@ -344,14 +344,37 @@ describe("web UI hosting", () => {
     app = await buildApp({ dbPath, webDir, now: () => clock });
     base = await app.listen({ host: "127.0.0.1", port: 0 });
 
-    expect(await (await fetch(`${base}/`)).text()).toContain("<title>Banyan</title>");
+    const index = await fetch(`${base}/`);
+    expect(await index.text()).toContain("<title>Banyan</title>");
+    expect(index.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(await (await fetch(`${base}/app.js`)).text()).toBe("console.log('banyan')");
     const deepLink = await fetch(`${base}/rooms/abc/agents/xyz`);
     expect(deepLink.status).toBe(200);
+    expect(deepLink.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(await deepLink.text()).toContain("<title>Banyan</title>");
     const missingApi = await fetch(`${base}/api/nope`);
     expect(missingApi.status).toBe(404);
     expect(await missingApi.json()).toEqual({ error: "not found" });
+  });
+});
+
+describe("desktop client distribution", () => {
+  it("serves the install script and only the installers from the downloads directory", async () => {
+    await app.close();
+    const dir = mkdtempSync(join(tmpdir(), "banyan-desktop-"));
+    writeFileSync(join(dir, "install.sh"), "#!/bin/bash\necho install\n");
+    writeFileSync(join(dir, "Banyan-x64.dmg"), "x64 image");
+    writeFileSync(join(dir, "builder-debug.yml"), "leftover");
+    app = await buildApp({ dbPath, desktop: { installScript: join(dir, "install.sh"), downloadsDir: dir }, now: () => clock });
+    base = await app.listen({ host: "127.0.0.1", port: 0 });
+
+    const script = await fetch(`${base}/install.sh`);
+    expect(script.headers.get("content-type")).toBe("text/x-shellscript; charset=utf-8");
+    expect(await script.text()).toBe("#!/bin/bash\necho install\n");
+    expect(await (await fetch(`${base}/downloads/Banyan-x64.dmg`)).text()).toBe("x64 image");
+    expect((await fetch(`${base}/downloads/Banyan-arm64.dmg`)).status).toBe(404);
+    expect((await fetch(`${base}/downloads/builder-debug.yml`)).status).toBe(404);
+    expect((await fetch(`${base}/downloads/`)).status).toBe(404);
   });
 });
 

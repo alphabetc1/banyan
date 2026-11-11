@@ -6,3 +6,4 @@ export * from "./protocol.ts";
 export * from "./connection.ts";
 export * from "./draft.ts";
 export { ulid as newId } from "ulid";
+export * from "./desktop.ts";

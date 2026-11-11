@@ -1,4 +1,5 @@
 // HTTP + WebSocket API of the room server.
+import { readFileSync } from "node:fs";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
@@ -7,6 +8,10 @@ import { ClientMessage, draft, newId, type Actor, type ServerMessage } from "@ba
 import { Rooms } from "./rooms.ts";
 import { Store, type TokenGrant } from "./store.ts";
 
+// The UI loads only its own bundled assets and talks only to this server (including its
+// WebSocket); inline styles come from React style props.
+const WEB_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 const TRANSCRIPT_PAGE_MAX = 200;
 
@@ -14,6 +19,8 @@ export interface AppOptions {
   dbPath: string;
   // Built web UI to serve; API routes keep precedence and unknown paths fall back to index.html.
   webDir?: string;
+  // Desktop client distribution: /install.sh and the installers under /downloads/.
+  desktop?: { installScript: string; downloadsDir: string };
   logger?: boolean;
   now?: () => number;
 }
@@ -55,10 +62,22 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   });
   await app.register(fastifyWebsocket);
   if (opts.webDir) {
-    await app.register(fastifyStatic, { root: opts.webDir });
+    await app.register(fastifyStatic, { root: opts.webDir, setHeaders: (reply) => reply.header("content-security-policy", WEB_CSP) });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
       return reply.sendFile("index.html");
+    });
+  }
+  if (opts.desktop) {
+    const { installScript, downloadsDir } = opts.desktop;
+    app.get("/install.sh", async (_req, reply) => reply.type("text/x-shellscript; charset=utf-8").send(readFileSync(installScript, "utf8")));
+    await app.register(fastifyStatic, {
+      root: downloadsDir,
+      prefix: "/downloads/",
+      decorateReply: false,
+      index: false,
+      // Only the installers, not build leftovers next to them.
+      allowedPath: (pathName) => /^\/Banyan-(x64|arm64)\.dmg$/.test(pathName),
     });
   }
   app.addHook("onClose", async () => store.close());

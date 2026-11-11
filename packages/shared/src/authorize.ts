@@ -1,7 +1,7 @@
 // Write authorization and referential checks for event drafts.
 // The server runs this before appending; it returns a reason string when the draft is rejected.
 import { SERVER_ONLY_EVENT_TYPES, type Actor, type EventDraft } from "./events.ts";
-import { isGoalWithin, postReviewers, type Agent, type RoomState } from "./state.ts";
+import { agentGroup, isGoalWithin, postReviewers, type Agent, type RoomState } from "./state.ts";
 
 function agentOwnedByRunner(state: RoomState, actor: Actor, agentId: string): string | null {
   const agent = state.agents[agentId];
@@ -18,7 +18,7 @@ function actingAgent(state: RoomState, actor: Actor): Agent | null {
 function leaderCovers(state: RoomState, actor: Actor, goalId: string): boolean {
   const agent = actingAgent(state, actor);
   if (!agent || agent.role !== "leader") return false;
-  const group = state.groups[agent.groupId];
+  const group = agentGroup(state, agent);
   return group !== undefined && isGoalWithin(state, goalId, group.goalId);
 }
 
@@ -58,12 +58,13 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       const p = draft.payload;
       if (actor.kind !== "member") return "only members may create agents";
       if (state.agents[p.agentId]) return `agent ${p.agentId} already exists`;
-      const group = state.groups[p.groupId];
-      if (!group) return `unknown group ${p.groupId}`;
       const runner = state.runners[p.runnerId];
       if (!runner) return `unknown runner ${p.runnerId}`;
       if (runner.memberId !== actor.id) return "members may only start agents on their own runners";
       if (!state.goals[p.goalId]) return `unknown goal ${p.goalId}`;
+      if (p.groupId === null) return p.role === "worker" ? null : "only workers may be standalone; leaders and monitors belong to a group";
+      const group = state.groups[p.groupId];
+      if (!group) return `unknown group ${p.groupId}`;
       if (!isGoalWithin(state, p.goalId, group.goalId)) return "agent goal must lie within its group's goal";
       if (p.role === "leader" && group.leaderAgentId !== null) return "group already has a leader";
       if (p.role === "monitor" && group.monitorAgentId !== null) return "group already has a monitor";
@@ -128,8 +129,8 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       const sender = actingAgent(state, actor);
       if (!sender) return "only members or agents may send messages";
       if (sender.id === target.id) return "agents may not message themselves";
-      const group = state.groups[sender.groupId];
-      if (sender.role === "leader" && target.groupId === sender.groupId) return null;
+      const group = agentGroup(state, sender);
+      if (sender.role === "leader" && group && target.groupId === group.id) return null;
       if (sender.role === "monitor" && group?.leaderAgentId === target.id) return null;
       return "leaders may message their group; monitors may only message their leader";
     }

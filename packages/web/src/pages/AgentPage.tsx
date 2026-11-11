@@ -1,7 +1,7 @@
 // One agent: virtualized transcript (paged history + live), approvals, messaging and facts.
 import { useContext, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { draft, goalPath, newId, type Delivery, type RoomEvent, type TranscriptEntry } from "@banyan/shared";
+import { agentGroup, draft, goalPath, newId, type Delivery, type RoomEvent, type TranscriptEntry } from "@banyan/shared";
 import { fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "../api.ts";
 import { StatusDot, timeAgo, useAction, useNow } from "../components/common.tsx";
 import { useRoomStore } from "../contexts.ts";
@@ -214,7 +214,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <dt>{t("agent.goal")}</dt>
           <dd>{goalPath(state, agent.goalId).map((g) => g.title).join(" → ")}</dd>
           <dt>{t("agent.group")}</dt>
-          <dd>{state.groups[agent.groupId]?.name}</dd>
+          <dd>{agentGroup(state, agent)?.name ?? t("agent.standalone")}</dd>
           <dt>{t("agent.provider")}</dt>
           <dd>
             {agent.provider} · {agent.model}

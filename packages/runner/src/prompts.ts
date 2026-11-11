@@ -1,5 +1,9 @@
 // System prompts and runner-originated messages that explain the Banyan protocol to agents.
-import { goalPath, type Agent, type RoomState } from "@banyan/shared";
+import { agentGroup, goalPath, type Agent, type RoomState } from "@banyan/shared";
+
+const STANDALONE = `You work on your own, not in a group. Your peers are the other agents on your goal: room_get_context
+shows their findings and directions. With proposeRoomVisible, a leader on your goal path (or a person) reviews your
+finding before the whole room sees it. Your "done" and "blocked" phases alert the people watching the room.`;
 
 const COMMON = `You are an agent in a Banyan room: several agents, run by several people, work toward a shared goal tree.
 Coordinate only through the room_* tools:
@@ -30,11 +34,12 @@ function goalPathText(state: RoomState, goalId: string): string {
 }
 
 export function systemPrompt(state: RoomState, agent: Agent): string {
-  const group = state.groups[agent.groupId];
+  const group = agentGroup(state, agent);
   return [
     COMMON,
     ROLE[agent.role],
-    `Your name: ${agent.name}. Your group: ${group?.name ?? agent.groupId}. Your goal: ${goalPathText(state, agent.goalId)}.`,
+    group ? "" : STANDALONE,
+    `Your name: ${agent.name}. ${group ? `Your group: ${group.name}. ` : ""}Your goal: ${goalPathText(state, agent.goalId)}.`,
     agent.instructions ? `Instructions from the person who started you:\n${agent.instructions}` : "",
   ]
     .filter(Boolean)

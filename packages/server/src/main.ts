@@ -9,7 +9,13 @@ const port = Number(process.env.BANYAN_PORT ?? "7700");
 const dbPath = process.env.BANYAN_DB ?? "banyan.sqlite";
 const webDir = process.env.BANYAN_WEB_DIR ?? fileURLToPath(new URL("../../web/dist", import.meta.url));
 
-const app = await buildApp({ dbPath, logger: true, ...(existsSync(webDir) ? { webDir } : {}) });
+// Installers are built with `pnpm --filter @banyan/desktop dist`; until then downloads are 404.
+const desktop = {
+  installScript: fileURLToPath(new URL("../../desktop/install.sh", import.meta.url)),
+  downloadsDir: process.env.BANYAN_DESKTOP_DOWNLOADS ?? fileURLToPath(new URL("../../desktop/build/dist", import.meta.url)),
+};
+
+const app = await buildApp({ dbPath, logger: true, ...(existsSync(webDir) ? { webDir } : {}), ...(existsSync(desktop.installScript) ? { desktop } : {}) });
 await app.listen({ host, port });
 
 // Close connections and the database cleanly when the service manager stops us.

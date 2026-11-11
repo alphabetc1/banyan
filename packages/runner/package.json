@@ -2,6 +2,12 @@
   "name": "@banyan/runner",
   "private": true,
   "type": "module",
+  "exports": {
+    "./registration": "./src/registration.ts",
+    "./logger": "./src/logger.ts",
+    "./runner": "./src/runner.ts",
+    "./agent-processes": "./src/agent-processes.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run --exclude 'test/**/*.e2e.test.ts'",

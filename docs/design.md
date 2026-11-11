@@ -370,3 +370,43 @@ banyan/                     pnpm monorepo, Node 22, TypeScript strict
 
 - 每个 runner 都会完整 clone 一次仓库。同一台机器上跑多个 runner 时，可以考虑用 `--reference` 共享对象库。
 - UI 还不显示每个 agent 的花费。Claude 的花费目前只出现在 transcript 里；Codex 只上报 token 用量，没有美元金额。
+
+## 20. 桌面客户端（`packages/desktop`）
+
+Rhett 确认的决定（2026-11-11）：做一个类似 Orca 的桌面客户端，形态是"Electron 桌面壳 + 内置 runner"，不嵌入终端，agent 仍然走结构化接口。
+
+- **UI 来源**：窗口直接加载 room server 的 URL（首次启动时填写），不在客户端里另打包 web。UI 与 server 的版本始终一致；客户端只有在壳或 runner 改动时才需要重新发版。
+- **runner**：每个 room 对应一个 runner，运行在 Electron 的 `utilityProcess` 中，复用 `@banyan/runner` 的 `Runner` 类。注册逻辑和 runner 锁由 CLI 与客户端共用（`packages/runner/src/registration.ts`）。
+- **runner 锁**：`<roomDir>/runner.lock` 里记录持锁进程的 pid。同一个 room 同时只能有一个 runner（launchd 起的或客户端起的都算）；第二个启动时直接报错。如果锁文件里的 pid 已经不存在，视为陈旧锁，直接接管。
+- **web ↔ 客户端**：preload 暴露 `window.banyanDesktop`。web 端只在检测到它时显示"在本机运行 agent"开关；浏览器里的行为不变。member token 只在用户打开开关时交给主进程，用于注册 runner。
+- **生命周期**：关窗口只是隐藏到托盘，runner 照常运行；从托盘退出时优雅停机（先 drain outbox），下次启动走已有的 resume 流程恢复。
+- **runner 崩溃**：不自动重启（Rhett 确认）。UI 显示"本机 runner 出错已停止"、退出码和日志路径，并提供"重新启动"按钮；重新启动或者重开客户端时，agent 接着原来的会话继续，之前的历史全部可见。
+- **历史不丢**：transcript 条目一产生就写入 runner 的本地 outbox（SQLite），不再在内存里攒 1 秒；即使 runner 被强杀，最多丢掉 provider 还没交给 runner 的那一部分。
+- **孤儿 agent 进程**：runner 被强杀后，Claude CLI 会继续执行当前 turn（实测）。现在 agent 的 CLI 进程（claude、codex app-server）都在独立的进程组里启动，并登记在 `<roomDir>/agent-processes`。客户端一发现 runner 意外退出就清理这些进程；runner 每次启动时也会清理上一次遗留的。清理顺序是先 SIGTERM，让 CLI 结束它放在其他进程组里的工具命令（实测 Claude 的 Bash 工具和 Codex 的沙箱命令都是这样），等 3 秒后再 SIGKILL。杀之前会核对命令行，避免 pid 被复用后误杀无关进程。
+- **PATH**：从 Dock 启动的 GUI 应用拿不到 shell 的 PATH，启动时先从登录 shell 读取一次 PATH，否则找不到 `codex`、`git`、`gh`。
+- **Claude 可执行文件**：claude-agent-sdk 0.3.322 通过按平台拆分的 optionalDependency（`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`，约 320MB）自带 claude 可执行文件。打包时关闭 asar，这样这个可执行文件可以按原路径执行。Codex 用系统里安装的 `codex`。
+- **better-sqlite3**：v13 自带 Node-API 预编译包，Node 和 Electron 都能直接加载，不需要按 Electron 的 ABI 重新编译。
+- **打包**：`pnpm --filter @banyan/desktop dist` 在一台机器上同时打出 `Banyan-x64.dmg` 和 `Banyan-arm64.dmg`。arm64 用 `npm install --cpu=arm64` 取对应的 claude 平台包，可以在 Intel Mac 上交叉打包。安装包暂不签名。
+- **一键安装**（Rhett 确认由 room server 分发）：server 提供 `/install.sh` 和 `/downloads/Banyan-<arch>.dmg`。邀请对话框和加入页会显示 `curl -fsSL <server>/install.sh | bash -s <server>`。脚本按硬件判断架构（不用 `uname -m`，因为在 Rosetta 下它会报 x86_64），装到 `/Applications`；如果客户端正在运行，就用 SIGTERM 让它优雅退出后再替换；最后用 `--server-url` 启动客户端，所以不用手动填 server 地址。用 curl 下载的文件不带 quarantine 标记，未签名的 app 不会被 Gatekeeper 拦下。
+- 客户端不内置 room server，server 仍然单独部署。
+- **通知**：客户端里打开 room 时，只有"自己的 runner 上的 agent"出现新的待处理项（审批、🔴、无人可审的发现）才弹系统通知；打开 room 时已经存在的项只出现在收件箱里，不弹通知。点击通知会打开对应 agent 的页面。
+- **CSP**：server 给 web UI 的所有页面加上 `Content-Security-Policy`（只允许同源脚本和连接）。这个缺口是做客户端时被 Electron 的安全警告发现的，对浏览器访问同样有效。
+- **测试**：`pnpm --filter @banyan/desktop test:e2e` 先打出两个架构的安装包，再用 Playwright 启动 app、连接真实 server，覆盖以下场景：
+  - 开关本机 runner；关窗口后 runner 继续运行；退出时优雅停机；重启后自动恢复。
+  - 锁冲突时报错；server 地址不可达时报错。
+  - 在 Dock 那种精简 PATH 下运行真实的 Claude 和 Codex agent。
+  - 两个真实 agent 跑到一半时用 SIGKILL 杀掉 runner：UI 报告崩溃且不自动重启，agent 进程（包括工具命令）都被结束；重开客户端后历史完整，两个 agent 都接着原来的会话完成任务。
+  - 用邀请对话框里的那行命令真实安装，安装后的 app 直接打开在该 server 上；再执行一次会优雅退出正在运行的客户端并替换。
+  - 两个安装包里各个可执行文件的架构都正确。
+
+## 21. 独立 agent（不属于任何 group）
+
+Rhett 确认的决定（2026-11-11）：支持像 Orca 那样直接创建一个个独立 agent，不用先建 group。
+
+- **数据模型**：`agent.created` 的 `groupId` 可以为 null。旧事件里都有 groupId，重放事件日志不受影响。只有 worker 可以独立；leader 和 monitor 必须属于某个 group。
+- **目标**：独立 agent 仍然挂在某个目标上，默认是当前选中的目标（例如 room 总目标）。这样 goal 树、Worktree 页面和发现分享都照常工作。
+- **同伴**：独立 agent 的 `room_get_context` 返回同一目标上所有 agent 的发现和方向；`room_list_directions` 默认列出它自己目标下的方向。
+- **审核**：独立 agent 提议在 room 级共享的发现，从它自己的目标开始沿目标链向上找，第一个有 leader 的 group 的 leader 负责审核；整条链上都没有 leader 时交给人（进入「需要处理」收件箱）。
+- **唤醒**：独立 agent 报告 done 或 blocked 时没有 leader 可以通知，提醒的是看着 room 的人。
+- **UI**：「新建 agent」对话框的 group 选项里多了「不加入 group（独立 agent）」；所选目标下还没有 group 时这是默认值。总览页在 group 上方单独显示「独立 agent」区域，包括子目标上的独立 agent。
+

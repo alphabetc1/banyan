@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { InviteDialog } from "../components/dialogs.tsx";
 import { Preferences } from "../components/common.tsx";
 import { RoomContext } from "../contexts.ts";
+import { LocalRunnerControl, useAttentionNotifications } from "../desktop.tsx";
 import { useT, type MessageKey } from "../i18n.ts";
 import { RoomStore, useRoomVersion } from "../room-store.ts";
 import { linkProps, routePath, type Route } from "../router.ts";
@@ -55,14 +56,15 @@ export function RoomShell({ route }: { route: RoomRoute }) {
   if (!store) return <div className="content faint">…</div>;
   return (
     <RoomContext.Provider value={store}>
-      <RoomFrame route={route} store={store} />
+      <RoomFrame route={route} store={store} memberToken={creds.memberToken} />
     </RoomContext.Provider>
   );
 }
 
-function RoomFrame({ route, store }: { route: RoomRoute; store: RoomStore }) {
+function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: RoomStore; memberToken: string }) {
   const t = useT();
   useRoomVersion(store);
+  useAttentionNotifications(store, route.roomId);
   const [inviting, setInviting] = useState(false);
   const room = store.state?.room;
   const activePage = route.page === "agent" ? "overview" : route.page;
@@ -83,6 +85,7 @@ function RoomFrame({ route, store }: { route: RoomRoute; store: RoomStore }) {
             ))}
           </nav>
           <span className="spacer" />
+          <LocalRunnerControl roomId={route.roomId} memberToken={memberToken} />
           <button onClick={() => setInviting(true)}>{t("top.invite")}</button>
           <Preferences />
         </header>

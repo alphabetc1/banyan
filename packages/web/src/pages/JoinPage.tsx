@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { fetchState, joinRoom } from "../api.ts";
 import { Preferences, useAction } from "../components/common.tsx";
+import { CopyField } from "../components/dialogs.tsx";
+import { inDesktopClient, installCommand } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 import { navigate } from "../router.ts";
 import { saveRoom } from "../session.ts";
@@ -46,6 +48,12 @@ export function JoinPage({ roomId }: { roomId: string }) {
           </>
         )}
       </form>
+      {!inDesktopClient && (
+        <section className="centered panel stack">
+          <span className="muted">{t("invite.desktop")}</span>
+          <CopyField testId="install-command" value={installCommand(window.location.origin)} />
+        </section>
+      )}
     </div>
   );
 }

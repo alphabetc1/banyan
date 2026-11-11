@@ -1,6 +1,7 @@
 // Claude Code agents through the Agent SDK: one long-lived streaming-input query per agent.
 import { query, type PermissionMode, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Delivery, TranscriptEntry } from "@banyan/shared";
+import type { AgentProcesses } from "../agent-processes.ts";
 import { clip, DEFAULT_MODEL, type AgentProvider, type AgentSession, type SessionCallbacks, type SessionSpec } from "./types.ts";
 
 // steer must reach the agent during its current turn; fyi waits until the turn ends.
@@ -69,7 +70,7 @@ class ClaudeSession implements AgentSession {
   private abort = new AbortController();
   private stopped = false;
 
-  constructor(spec: SessionSpec, private cb: SessionCallbacks, permissionMode: PermissionMode) {
+  constructor(spec: SessionSpec, private cb: SessionCallbacks, permissionMode: PermissionMode, processes: AgentProcesses) {
     let resolveReady!: () => void;
     let rejectReady!: (e: Error) => void;
     this.ready = new Promise((resolve, reject) => {
@@ -86,6 +87,11 @@ class ClaudeSession implements AgentSession {
         model: spec.model === DEFAULT_MODEL ? undefined : spec.model,
         resume: spec.resumeSessionId ?? undefined,
         abortController: this.abort,
+        spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
+          const child = processes.spawn(command, args, { cwd, env, signal });
+          child.stderr.pipe(process.stderr, { end: false });
+          return child;
+        },
         settingSources: [],
         strictMcpConfig: true,
         mcpServers: { room: { type: "http", url: spec.roomMcpUrl } },
@@ -141,10 +147,13 @@ class ClaudeSession implements AgentSession {
 }
 
 export class ClaudeProvider implements AgentProvider {
-  constructor(private permissionMode: PermissionMode = "auto") {}
+  constructor(
+    private processes: AgentProcesses,
+    private permissionMode: PermissionMode = "auto",
+  ) {}
 
   start(spec: SessionSpec, callbacks: SessionCallbacks): AgentSession {
-    return new ClaudeSession(spec, callbacks, this.permissionMode);
+    return new ClaudeSession(spec, callbacks, this.permissionMode, this.processes);
   }
 
   async close(): Promise<void> {}

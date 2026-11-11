@@ -47,16 +47,19 @@ export function goalTree(state: RoomState): GoalNode | null {
   return build(root, new Set());
 }
 
-export function groupsOnGoal(state: RoomState, goalId: string): Group[] {
-  return Object.values(state.groups).filter((g) => g.goalId === goalId);
-}
-
 // Groups on the goal and everywhere beneath it, shallowest goal first.
 export function groupsInSubtree(state: RoomState, goalId: string): Group[] {
   const depth = (g: Group) => goalPath(state, g.goalId).length;
   return Object.values(state.groups)
     .filter((g) => isGoalWithin(state, g.goalId, goalId))
     .sort((a, b) => depth(a) - depth(b));
+}
+
+// Agents outside any group whose goal lies in the subtree, oldest first.
+export function standaloneAgentsInSubtree(state: RoomState, goalId: string): Agent[] {
+  return Object.values(state.agents)
+    .filter((a) => a.groupId === null && isGoalWithin(state, a.goalId, goalId))
+    .sort((a, b) => a.createdAt - b.createdAt);
 }
 
 // Leader first, then monitor, then workers by creation time.
@@ -86,6 +89,25 @@ export function attentionItems(state: RoomState, onlineRunnerIds: string[], now:
     if (p.review.state === "pending" && postReviewers(state, p).length === 0) items.push({ kind: "review", postId: p.id, agentId: p.agentId, summary: p.summary });
   }
   return items;
+}
+
+export function attentionKey(item: AttentionItem): string {
+  switch (item.kind) {
+    case "approval":
+      return `approval:${item.approvalId}`;
+    case "unhealthy":
+      return `unhealthy:${item.agentId}`;
+    case "review":
+      return `review:${item.postId}`;
+  }
+}
+
+// Attention items about agents hosted on one of this member's runners.
+export function ownAttention(state: RoomState, memberId: string, items: AttentionItem[]): AttentionItem[] {
+  return items.filter((item) => {
+    const agent = state.agents[item.agentId];
+    return agent !== undefined && state.runners[agent.runnerId]?.memberId === memberId;
+  });
 }
 
 export type PostColumn = "pending" | "group" | "room";
