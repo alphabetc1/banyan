@@ -12,6 +12,8 @@ npmRebuild: false
 mac:
   target: dmg
   category: public.app-category.developer-tools
+  # Drawn from assets/icon.svg at the repository root.
+  icon: resources/icon.icns
   # Unsigned for internal use; the room server's install script installs it without the
   # quarantine flag, so Gatekeeper does not block the first launch.
   identity: null

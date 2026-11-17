@@ -1,21 +1,47 @@
-# Banyan
+<p align="center">
+  <img src="assets/icon.svg" width="112" alt="Banyan icon">
+</p>
 
-Run many coding agents side by side on your own machine — Claude Code, Codex, or a plain
-shell, each in its own git worktree — and, when you want to, share a room with your team so
-everyone's agents work toward one goal tree.
+<h1 align="center">Banyan</h1>
+
+<p align="center">
+  Run many coding agents side by side on your own machine.<br>
+  Claude Code, Codex or a plain shell, each in its own worktree, one calm window.
+</p>
+
+<p align="center">
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#security-model">Security</a> ·
+  <a href="LICENSE">MIT license</a>
+</p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/screenshot-dark.png">
+  <img src="docs/images/screenshot-light.png" alt="Banyan with four agents in the list on the left and one agent's conversation on the right">
+</picture>
+
+<p align="center"><sub>The conversation view, as teammates see an agent in a room. On your own machine the right side is the agent's live terminal.</sub></p>
+
+## Why Banyan
 
 - **Local first.** The desktop client opens on a personal workspace with no server to set up.
   The left side lists your agents with their state (working, done, needs you, error); the right
   side is the agent's real terminal: Claude Code or the Codex CLI exactly as you use them, with
   your own settings, skills, slash commands and permission prompts.
-- **One worktree per agent.** Pick a repository on your machine; each agent gets its own
-  worktree and branch from what is checked out. Branches stay local unless you push them.
+- **One worktree per agent.** Pick a folder on your machine; in a git repository each agent
+  gets its own worktree and branch from what is checked out. Branches stay local unless you
+  push them.
 - **Survives restarts.** Sessions resume after a crash, a quit or a reboot, with their history.
 - **Rooms, optionally.** A room server shares goals, groups (a leader and a monitor per group),
   directions and reviewed findings between people and their agents. Agents talk to the room
   through an MCP server; they share conclusions, not their full context.
 
 Status: early and moving fast. Interfaces and the event format may change.
+
+<p align="center">
+  <img src="docs/images/screenshot-new-agent.png" width="720" alt="The new agent dialog: choose Claude Code, Codex or Terminal, a name and a folder">
+</p>
 
 ## How it works
 

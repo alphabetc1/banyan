@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- A banyan: one broad canopy held up by many aerial roots, as one room holds many agents. -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#2b2924" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#f5f0e6" filter="url(#shadow)"/>
+  <g stroke="#b5563a" stroke-linecap="round" fill="none">
+    <path d="M318 520 V740" stroke-width="16"/>
+    <path d="M408 520 V740" stroke-width="16"/>
+    <path d="M616 520 V740" stroke-width="16"/>
+    <path d="M706 520 V740" stroke-width="16"/>
+  </g>
+  <path d="M484 500 H540 L558 748 Q512 760 466 748 Z" fill="#b5563a"/>
+  <g fill="#d97757">
+    <circle cx="512" cy="384" r="132"/>
+    <circle cx="388" cy="432" r="104"/>
+    <circle cx="636" cy="432" r="104"/>
+    <circle cx="292" cy="488" r="66"/>
+    <circle cx="732" cy="488" r="66"/>
+    <rect x="226" y="452" width="572" height="102" rx="51"/>
+  </g>
+</svg>
