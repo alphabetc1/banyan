@@ -1,5 +1,5 @@
 // View-model derivations over the room projection, kept pure for testing.
-import { deriveHealth, goalPath, isGoalWithin, postReviewers, type Actor, type Agent, type Goal, type Group, type Health, type HealthReason, type Post, type RoomState } from "@banyan/shared";
+import { deriveHealth, goalPath, isGoalWithin, pendingApprovalCount, postReviewers, type Actor, type Agent, type Goal, type Group, type Health, type HealthReason, type Post, type RoomState } from "@banyan/shared";
 
 export type CardStatus = Health["level"] | "offline";
 
@@ -20,6 +20,28 @@ export function agentStatus(state: RoomState, agent: Agent, onlineRunnerIds: str
   return health;
 }
 
+// What the agent list shows for an agent, as one icon.
+export type AgentIconKind = "working" | "done" | "needs_you" | "error" | "starting" | "offline" | "stopped" | "terminal";
+
+export function agentIcon(state: RoomState, agent: Agent, onlineRunnerIds: string[], now: number): AgentIconKind {
+  const status = agentStatus(state, agent, onlineRunnerIds, now);
+  if (status.level === "red") return "error";
+  if (status.level === "offline") return "offline";
+  if (agent.process === "exited") return "stopped";
+  if (agent.process !== "running") return "starting";
+  if (agent.activity === "awaiting_input" || pendingApprovalCount(state, agent.id) > 0) return "needs_you";
+  // A shell has no turns to follow.
+  if (agent.provider === "shell") return "terminal";
+  if (agent.activity === "working") return "working";
+  if (agent.activity === "idle") return "done";
+  return "starting";
+}
+
+// Agents not removed; removed ones stay in the room's history only.
+export function activeAgents(state: RoomState): Agent[] {
+  return Object.values(state.agents).filter((a) => !a.archived);
+}
+
 export interface GoalNode {
   goal: Goal;
   children: GoalNode[];
@@ -38,7 +60,7 @@ export function goalTree(state: RoomState): GoalNode | null {
     children.set(g.parentId, list);
   }
   const ownAgents = new Map<string, number>();
-  for (const a of Object.values(state.agents)) ownAgents.set(a.goalId, (ownAgents.get(a.goalId) ?? 0) + 1);
+  for (const a of activeAgents(state)) ownAgents.set(a.goalId, (ownAgents.get(a.goalId) ?? 0) + 1);
   const build = (goal: Goal, seen: Set<string>): GoalNode => {
     seen.add(goal.id);
     const kids = (children.get(goal.id) ?? []).filter((c) => !seen.has(c.id)).sort((a, b) => a.createdAt - b.createdAt).map((c) => build(c, seen));
@@ -57,7 +79,7 @@ export function groupsInSubtree(state: RoomState, goalId: string): Group[] {
 
 // Agents outside any group whose goal lies in the subtree, oldest first.
 export function standaloneAgentsInSubtree(state: RoomState, goalId: string): Agent[] {
-  return Object.values(state.agents)
+  return activeAgents(state)
     .filter((a) => a.groupId === null && isGoalWithin(state, a.goalId, goalId))
     .sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -65,7 +87,7 @@ export function standaloneAgentsInSubtree(state: RoomState, goalId: string): Age
 // Leader first, then monitor, then workers by creation time.
 export function groupAgents(state: RoomState, groupId: string): Agent[] {
   const rank = { leader: 0, monitor: 1, worker: 2 } as const;
-  return Object.values(state.agents)
+  return activeAgents(state)
     .filter((a) => a.groupId === groupId)
     .sort((a, b) => rank[a.role] - rank[b.role] || a.createdAt - b.createdAt);
 }
@@ -83,7 +105,7 @@ export function attentionItems(state: RoomState, onlineRunnerIds: string[], now:
   for (const a of Object.values(state.approvals)) {
     if (a.state === "pending") items.push({ kind: "approval", approvalId: a.id, agentId: a.agentId, tool: a.tool, since: a.requestedAt });
   }
-  for (const agent of Object.values(state.agents)) {
+  for (const agent of activeAgents(state)) {
     if (agent.process === "running" && agent.activity === "awaiting_input") items.push({ kind: "input", agentId: agent.id });
     const status = agentStatus(state, agent, onlineRunnerIds, now);
     if (status.level === "red") items.push({ kind: "unhealthy", agentId: agent.id, reasons: status.reasons });

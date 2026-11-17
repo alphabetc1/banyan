@@ -8,7 +8,8 @@ import { openTerminal } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 
 // sessionKey changes when the agent's session restarts, so the view reconnects to the new one.
-export function TerminalView({ roomId, agentId, sessionKey }: { roomId: string; agentId: string; sessionKey: string }) {
+// onRestart, when given, offers to start the agent again once its terminal has closed.
+export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomId: string; agentId: string; sessionKey: string; onRestart?: () => void }) {
   const t = useT();
   const host = useRef<HTMLDivElement>(null);
   const [closed, setClosed] = useState<string | null>(null);
@@ -52,7 +53,16 @@ export function TerminalView({ roomId, agentId, sessionKey }: { roomId: string; 
   return (
     <div className="terminal-pane" data-testid="terminal">
       <div ref={host} className="terminal-host" />
-      {closed && <div className="terminal-closed faint">{`${t("agent.terminalClosed")}: ${closed}`}</div>}
+      {closed && (
+        <div className="terminal-closed faint row">
+          <span>{`${t("agent.terminalClosed")}: ${closed}`}</span>
+          {onRestart && (
+            <button onClick={onRestart} data-testid="terminal-restart">
+              {t("agent.restart")}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

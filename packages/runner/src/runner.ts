@@ -7,7 +7,7 @@ import { AgentProcesses, killLeftoverAgentProcesses } from "./agent-processes.ts
 import { ServerLink } from "./link.ts";
 import { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
-import { ClaudeTerminalProvider } from "./providers/claude-terminal.ts";
+import { TerminalProvider } from "./providers/terminal.ts";
 import type { TerminalHandle } from "./providers/types.ts";
 import { ClaudeProvider } from "./providers/claude.ts";
 import { CodexProvider } from "./providers/codex.ts";
@@ -32,7 +32,8 @@ export class Runner {
   readonly link: ServerLink;
   readonly mcp: RoomMcp;
   readonly supervisor: Supervisor;
-  private providers: { claude: ClaudeProvider; codex: CodexProvider; claudeTerminal: ClaudeTerminalProvider };
+  private providers: { claude: ClaudeProvider; codex: CodexProvider };
+  private terminals: { claude: TerminalProvider; codex: TerminalProvider; shell: TerminalProvider };
 
   constructor(
     private readonly config: RunnerConfig,
@@ -56,17 +57,15 @@ export class Runner {
     const emit = (drafts: EventDraft[], asAgent: string | null = null) => this.link.emit(drafts, asAgent);
     this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message) });
     const processes = new AgentProcesses(config.roomDir);
-    this.providers = {
-      claude: new ClaudeProvider(processes, config.claudePermissionMode),
-      codex: new CodexProvider(log, processes),
-      claudeTerminal: new ClaudeTerminalProvider(processes, config.claudePermissionMode),
-    };
+    this.providers = { claude: new ClaudeProvider(processes, config.claudePermissionMode), codex: new CodexProvider(log, processes) };
+    this.terminals = { claude: TerminalProvider.claude(processes, config.claudePermissionMode), codex: TerminalProvider.codex(processes), shell: TerminalProvider.shell(processes) };
     supervisor = new Supervisor({
       runnerId: config.runnerId,
       roomDir: config.roomDir,
       store: this.store,
       mcp: this.mcp,
       providers: this.providers,
+      terminals: this.terminals,
       log,
       state,
       emit,
@@ -80,7 +79,9 @@ export class Runner {
     const leftovers = await killLeftoverAgentProcesses(this.config.roomDir);
     if (leftovers.length > 0) this.log.warn(`ended agent process(es) left by a previous runner: ${leftovers.join(", ")}`);
     await this.mcp.start();
-    await this.providers.claudeTerminal.open();
+    await this.terminals.claude.open();
+    await this.terminals.codex.open();
+    await this.terminals.shell.open();
     await this.link.start();
     await this.supervisor.start();
   }
@@ -96,7 +97,9 @@ export class Runner {
     await this.link.drain(STOP_DRAIN_MS);
     await this.providers.claude.close();
     await this.providers.codex.close();
-    await this.providers.claudeTerminal.close();
+    await this.terminals.claude.close();
+    await this.terminals.codex.close();
+    await this.terminals.shell.close();
     await this.mcp.close();
     this.link.close();
     this.store.close();

@@ -16,10 +16,11 @@ import { WorktreesPage } from "./WorktreesPage.tsx";
 
 type RoomRoute = Exclude<Route, { page: "home" } | { page: "join" }>;
 
-const NAV: { page: RoomRoute["page"]; label: MessageKey }[] = [
-  { page: "overview", label: "nav.overview" },
+// personal: also shown in a personal workspace, where coordination pages have no use.
+const NAV: { page: RoomRoute["page"]; label: MessageKey; personal?: boolean }[] = [
+  { page: "overview", label: "nav.overview", personal: true },
   { page: "goals", label: "nav.goals" },
-  { page: "worktrees", label: "nav.worktrees" },
+  { page: "worktrees", label: "nav.worktrees", personal: true },
   { page: "findings", label: "nav.findings" },
   { page: "coordination", label: "nav.coordination" },
 ];
@@ -79,7 +80,7 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
           </a>
           <RoomSwitcher roomId={route.roomId} roomName={room?.name ?? route.roomId} />
           <nav>
-            {NAV.map((n) => (
+            {NAV.filter((n) => n.personal || !room?.personal).map((n) => (
               <a key={n.page} className={activePage === n.page ? "active" : ""} {...linkProps(routePath({ page: n.page, roomId: route.roomId } as RoomRoute))}>
                 {t(n.label)}
               </a>

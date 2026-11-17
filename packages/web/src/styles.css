@@ -109,6 +109,11 @@ button {
 button:hover {
   border-color: var(--text-faint);
 }
+button.danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
 button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -315,25 +320,6 @@ label {
 }
 
 /* Status pills */
-.dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  display: inline-block;
-  flex: none;
-}
-.dot.green {
-  background: var(--green);
-}
-.dot.yellow {
-  background: var(--yellow);
-}
-.dot.red {
-  background: var(--red);
-}
-.dot.offline {
-  background: var(--text-faint);
-}
 .pill {
   display: inline-flex;
   align-items: center;
@@ -375,6 +361,83 @@ label {
   text-decoration: none;
   margin-top: 8px;
   font-size: 13px;
+}
+
+/* New agent dialog */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+}
+.segmented button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+.segmented button.selected {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text);
+}
+.addon {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  padding: 10px 14px;
+}
+.addon summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.addon[open] summary {
+  margin-bottom: 12px;
+}
+
+/* Agent state icons */
+.status-icon {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.status-icon.working {
+  color: var(--text);
+}
+.status-icon.done {
+  color: var(--green);
+}
+.status-icon.needs_you {
+  color: var(--yellow);
+}
+.status-icon.error {
+  color: var(--red);
+}
+.status-icon.starting,
+.status-icon.offline,
+.status-icon.stopped,
+.status-icon.terminal {
+  color: var(--text-faint);
+}
+.status-icon .spin {
+  transform-origin: 12px 12px;
+  animation: status-spin 0.9s linear infinite;
+}
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-icon .spin {
+    animation: none;
+  }
 }
 
 /* Overview: agent list + conversation */

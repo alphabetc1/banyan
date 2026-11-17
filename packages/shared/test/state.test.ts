@@ -263,6 +263,24 @@ describe("authorize", () => {
     r.must(ALICE, draft("message.sent", { messageId: "m2", toAgentId: "S", text: "hi", delivery: "fyi" }));
   });
 
+  it("lets an agent's owner or the room owner remove or restart it, and frees a removed leader's place", () => {
+    const r = seededRoom();
+    // W2 belongs to Bob; Alice owns the room.
+    expect(r.submit(agent("W1"), draft("agent.restart_requested", { agentId: "W2" }))).toBe("only people may remove or restart agents");
+    expect(r.submit(BOB, draft("agent.archived", { agentId: "W1" }))).toBe("only the agent's owner or the room owner may do this");
+    r.must(BOB, draft("agent.restart_requested", { agentId: "W2" }));
+    r.must(ALICE, draft("agent.archived", { agentId: "W2" }));
+    expect(r.state.agents.W2).toMatchObject({ archived: true });
+    expect(r.submit(BOB, draft("agent.restart_requested", { agentId: "W2" }))).toBe("the agent has been removed");
+    expect(r.submit(ALICE, draft("agent.archived", { agentId: "W2" }))).toBe("the agent has been removed");
+    expect(r.submit(ALICE, draft("agent.archived", { agentId: "nobody" }))).toBe("unknown agent nobody");
+
+    r.must(ALICE, draft("agent.archived", { agentId: "L" }));
+    expect(r.state.groups["prefill-group"]).toMatchObject({ leaderAgentId: null, monitorAgentId: "M" });
+    r.must(ALICE, draft("agent.created", { agentId: "L2", groupId: "prefill-group", runnerId: "runner-a", name: "new leader", role: "leader", provider: "claude", model: "default", goalId: "prefill", instructions: "" }));
+    expect(r.state.groups["prefill-group"]!.leaderAgentId).toBe("L2");
+  });
+
   it("lets leaders create goals only inside their subtree", () => {
     const r = seededRoom();
     r.must(agent("L"), draft("goal.created", { goalId: "kv", parentId: "prefill", title: "kv", description: "" }));

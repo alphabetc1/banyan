@@ -96,8 +96,8 @@ class ClaudeSession implements AgentSession {
         // servers and hooks load as usual, and every skill they have is available.
         settingSources: ["user", "project", "local"],
         skills: "all",
-        mcpServers: { room: { type: "http", url: spec.roomMcpUrl } },
-        systemPrompt: { type: "preset", preset: "claude_code", append: spec.systemPrompt },
+        mcpServers: spec.roomMcpUrl ? { room: { type: "http", url: spec.roomMcpUrl } } : {},
+        systemPrompt: spec.systemPrompt ? { type: "preset", preset: "claude_code", append: spec.systemPrompt } : { type: "preset", preset: "claude_code" },
         permissionMode,
         canUseTool: async (toolName, input) => {
           // Room tools are Banyan's own coordination channel and never need a human.

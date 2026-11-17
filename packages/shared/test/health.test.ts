@@ -18,6 +18,7 @@ function setup(overrides: Partial<Agent> = {}): { state: RoomState; agent: Agent
     instructions: "",
     repoPath: null,
     terminal: false,
+    archived: false,
     providerSessionId: "s",
     process: "running",
     processDetail: null,

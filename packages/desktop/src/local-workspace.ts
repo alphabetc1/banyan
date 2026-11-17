@@ -23,16 +23,17 @@ export async function startLocalServer(opts: { dataDir: string; webDir: string; 
   return { url, close: () => app.close() };
 }
 
-// Reuses the saved workspace while its credentials still work, and creates it otherwise.
+// Reuses the saved workspace while its credentials still work and it is a personal one, and
+// creates it otherwise.
 export async function ensureLocalWorkspace(serverUrl: string, saved: LocalWorkspace | null, names: { room: string; goal: string; owner: string }): Promise<LocalWorkspace> {
   if (saved) {
     const res = await fetch(`${serverUrl}/api/rooms/${saved.roomId}/state`, { headers: { authorization: `Bearer ${saved.memberToken}` } });
-    if (res.ok) return saved;
+    if (res.ok && ((await res.json()) as { state: { room: { personal: boolean } | null } }).state.room?.personal) return saved;
   }
   const res = await fetch(`${serverUrl}/api/rooms`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: names.room, goalTitle: names.goal, ownerName: names.owner }),
+    body: JSON.stringify({ name: names.room, goalTitle: names.goal, ownerName: names.owner, personal: true }),
   });
   if (!res.ok) throw new Error(`cannot create the local workspace: ${res.status} ${await res.text()}`);
   const created = (await res.json()) as { roomId: string; memberId: string; memberToken: string };

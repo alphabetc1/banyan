@@ -3,10 +3,10 @@
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { agentGroup, draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
+import { agentGroup, draft, isPlainAgent, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
-import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
+import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
 import { commitAll, createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
@@ -23,8 +23,10 @@ export interface SupervisorOptions {
   roomDir: string;
   store: LocalStore;
   mcp: RoomMcp;
-  // claudeTerminal runs Claude agents created in terminal mode.
-  providers: Record<Agent["provider"], AgentProvider> & { claudeTerminal?: AgentProvider };
+  // Managed sessions; a shell only ever runs in a terminal.
+  providers: Record<Exclude<Agent["provider"], "shell">, AgentProvider>;
+  // Run agents created in terminal mode, per provider, when this runner has them.
+  terminals?: Partial<Record<Agent["provider"], AgentProvider>>;
   log: Logger;
   state(): RoomState;
   emit(drafts: EventDraft[], asAgent?: string | null): void;
@@ -66,8 +68,9 @@ export class Supervisor {
 
   constructor(private opts: SupervisorOptions) {}
 
+  // This runner's agents that are still in use.
   private mine(state: RoomState): Agent[] {
-    return Object.values(state.agents).filter((a) => a.runnerId === this.opts.runnerId);
+    return Object.values(state.agents).filter((a) => a.runnerId === this.opts.runnerId && !a.archived);
   }
 
   // Brings every agent of this runner up, resuming sessions recorded by a previous process.
@@ -104,6 +107,12 @@ export class Supervisor {
     const state = this.opts.state();
     for (const e of events) {
       if (e.type === "agent.created" && e.payload.runnerId === this.opts.runnerId && this.started) {
+        void this.ensureRunning(e.payload.agentId);
+      } else if (e.type === "agent.archived" && state.agents[e.payload.agentId]?.runnerId === this.opts.runnerId) {
+        void this.running.get(e.payload.agentId)?.session.stop();
+      } else if (e.type === "agent.restart_requested" && state.agents[e.payload.agentId]?.runnerId === this.opts.runnerId && this.started) {
+        // A person asked, so earlier crashes no longer count against it.
+        this.crashCounts.set(e.payload.agentId, 0);
         void this.ensureRunning(e.payload.agentId);
       } else if (e.type === "message.sent") {
         this.deliverMessage(state, e.payload.messageId);
@@ -157,8 +166,8 @@ export class Supervisor {
   }
 
   private providerFor(agent: Agent): AgentProvider {
-    if (!agent.terminal) return this.opts.providers[agent.provider];
-    const terminal = agent.provider === "claude" ? this.opts.providers.claudeTerminal : undefined;
+    if (!agent.terminal && agent.provider !== "shell") return this.opts.providers[agent.provider];
+    const terminal = this.opts.terminals?.[agent.provider];
     if (!terminal) throw new Error(`terminal mode is not available for ${agent.provider} agents on this runner`);
     return terminal;
   }
@@ -180,18 +189,20 @@ export class Supervisor {
   private async startAgent(agentId: string): Promise<void> {
     try {
       const agent = this.opts.state().agents[agentId];
-      if (!agent) return;
+      if (!agent || agent.archived) return;
       this.opts.emit([draft("agent.process_changed", { agentId, process: "starting", detail: "preparing workspace" })]);
       const cwd = await this.workingDirectory(agent);
       const resumeId = agent.providerSessionId;
+      const state = this.opts.state();
+      const plain = isPlainAgent(state, agent);
       try {
-        await this.launch(agent, cwd, resumeId, resumeId ? RESUMED_MESSAGE : kickoffMessage(this.opts.state(), agent));
+        await this.launch(agent, cwd, resumeId, plain ? plainFirstMessage(agent, resumeId !== null) : resumeId ? RESUMED_MESSAGE : kickoffMessage(state, agent));
       } catch (e) {
         if (!resumeId) throw e;
         const reason = (e as Error).message;
         this.opts.log.warn(`agent ${agent.name}: resume failed (${reason}); starting a fresh session`);
         this.opts.emit([draft("agent.resumability_changed", { agentId, resumability: "lost", detail: reason })]);
-        await this.launch(agent, cwd, null, freshAfterLossMessage(this.opts.state(), agent, reason));
+        await this.launch(agent, cwd, null, plain ? plainFirstMessage(agent, false) : freshAfterLossMessage(this.opts.state(), agent, reason));
       }
     } catch (e) {
       if (this.closed) {
@@ -205,21 +216,23 @@ export class Supervisor {
     }
   }
 
-  private async launch(agent: Agent, cwd: string, resumeSessionId: string | null, firstMessage: string): Promise<void> {
+  private async launch(agent: Agent, cwd: string, resumeSessionId: string | null, firstMessage: string | null): Promise<void> {
     const agentId = agent.id;
     const state = this.opts.state();
     let markExited!: () => void;
     const exited = new Promise<void>((resolve) => (markExited = resolve));
     const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null };
     this.appendTranscript(agentId, [{ kind: "system", text: resumeSessionId ? "resuming session" : "starting session", ts: Date.now() }]);
+    if (firstMessage === null && !agent.terminal) throw new Error("a managed agent needs instructions to start with; add instructions or run it in a terminal");
     const provider = this.providerFor(agent);
     run.session = provider.start(
       {
         agentId,
         cwd,
         model: agent.model,
-        systemPrompt: systemPrompt(state, agent),
-        roomMcpUrl: this.opts.mcp.urlFor(agentId),
+        // A plain agent is the CLI as the person would use it, without Banyan's coordination.
+        systemPrompt: isPlainAgent(state, agent) ? null : systemPrompt(state, agent),
+        roomMcpUrl: isPlainAgent(state, agent) ? null : this.opts.mcp.urlFor(agentId),
         resumeSessionId,
       },
       {
@@ -241,6 +254,7 @@ export class Supervisor {
           this.opts.emit([draft("approval.requested", { approvalId, agentId, tool, input })]);
           return new Promise((resolve) => this.approvalWaiters.set(approvalId, resolve));
         },
+        onAcceptsInput: () => this.deliverPendingMessages(agentId),
         onTurnEnd: () => {
           this.crashCounts.set(agentId, 0);
           void this.syncWorktree(agentId);
@@ -252,8 +266,9 @@ export class Supervisor {
         },
       },
     );
-    // Claude only confirms a session after its first user message, so queue it before waiting.
-    run.session.send(firstMessage, "steer");
+    // Claude only confirms a managed session after its first user message, so queue it before
+    // waiting. A terminal may start without one and wait for its person.
+    if (firstMessage !== null) run.session.send(firstMessage, "steer");
     this.launching.set(agentId, run);
     try {
       await run.session.ready;
@@ -344,7 +359,8 @@ export class Supervisor {
     const msg = state.messages[messageId];
     if (!msg || this.opts.store.isDelivered(messageId)) return;
     const run = this.running.get(msg.toAgentId);
-    if (!run) return;
+    // Left pending, and delivered once the session takes input again.
+    if (!run || run.session.acceptsInput?.(msg.delivery) === false) return;
     const target = state.agents[msg.toAgentId];
     let text = msg.text;
     if (msg.from.kind === "agent") {

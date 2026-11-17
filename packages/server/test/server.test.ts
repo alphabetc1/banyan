@@ -172,7 +172,9 @@ describe("rooms and membership", () => {
     const created = await post("/api/rooms", { name: "local", goalTitle: "Local work", ownerName: "Rhett" });
     expect(created.status).toBe(200);
     const state = (await get(`/api/rooms/${created.json.roomId}/state`, created.json.memberToken)).json.state as RoomState;
-    expect(state.room).toMatchObject({ name: "local", repoUrl: null, baseBranch: null });
+    expect(state.room).toMatchObject({ name: "local", repoUrl: null, baseBranch: null, personal: false });
+    const personal = await post("/api/rooms", { name: "mine", goalTitle: "Mine", ownerName: "Rhett", personal: true });
+    expect((await get(`/api/rooms/${personal.json.roomId}/state`, personal.json.memberToken)).json.state.room).toMatchObject({ personal: true });
     const half = await post("/api/rooms", { name: "x", repoUrl: "git@example.com:x.git", goalTitle: "g", ownerName: "Rhett" });
     expect(half.status).toBe(400);
     expect(half.json.error).toContain("repoUrl and baseBranch go together");

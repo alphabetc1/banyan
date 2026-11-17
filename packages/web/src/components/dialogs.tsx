@@ -77,32 +77,54 @@ export function NewGroupDialog({ goalId, onClose }: { goalId: string; onClose: (
   );
 }
 
+const LAST_REPO_KEY = "banyan.lastRepoPath";
+
+function lastRepoPath(): string {
+  try {
+    return localStorage.getItem(LAST_REPO_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberRepoPath(path: string): void {
+  try {
+    localStorage.setItem(LAST_REPO_KEY, path);
+  } catch {
+    // Remembered for this page view only.
+  }
+}
+
+const KINDS = ["claude", "codex", "shell"] as const;
+
+// A new agent: by default a standalone one in its CLI's own terminal, in a repository on this
+// machine. Coordination (goal, group, role, instructions, managed mode) is an extra.
 export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: () => void }) {
   const t = useT();
   const store = useRoomStore();
   const state = store.state!;
   const action = useAction();
-  const groups = Object.values(state.groups).filter((g) => g.goalId === goalId);
+  const groups = Object.values(state.groups).filter((g) => isGoalWithin(state, g.goalId, goalId));
   const myRunners = Object.values(state.runners).filter((r) => r.memberId === store.memberId);
+  // A room without a shared fork needs every agent to name a repository; the last one used is
+  // the likely next one.
+  const needsRepo = !state.room?.repoUrl;
   const [form, setForm] = useState({
-    groupId: groups[0]?.id ?? "",
-    runnerId: myRunners[0]?.id ?? "",
-    name: "",
-    role: "worker" as Agent["role"],
     provider: "claude" as Agent["provider"],
-    model: "default",
+    name: "",
+    repoPath: needsRepo ? lastRepoPath() : "",
+    runnerId: myRunners[0]?.id ?? "",
+    groupId: "",
+    role: "worker" as Agent["role"],
     agentGoalId: goalId,
     instructions: "",
-    repoPath: "",
-    // Claude agents started from the desktop client default to Claude Code's own terminal.
-    terminal: inDesktopClient,
+    // Without a terminal, for machines nobody watches.
+    managed: false,
   });
-  // A room without a shared fork needs every agent to name a repository.
-  const needsRepo = !state.room?.repoUrl;
   const [pickError, setPickError] = useState<string | null>(null);
   const pick = () => {
     setPickError(null);
-    void pickRepository().then(
+    void pickRepository(form.repoPath || lastRepoPath()).then(
       (path) => path && setForm((f) => ({ ...f, repoPath: path })),
       (e: Error) => setPickError(e.message),
     );
@@ -112,41 +134,49 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
   const group = form.groupId ? state.groups[form.groupId] : undefined;
   const goalChoices = Object.values(state.goals).filter((g) => isGoalWithin(state, g.id, group?.goalId ?? goalId));
   const takenRoles = new Set([!group || group.leaderAgentId ? "leader" : "", !group || group.monitorAgentId ? "monitor" : ""]);
-  const setGroup = (e: { target: { value: string } }) => setForm({ ...form, groupId: e.target.value, ...(e.target.value ? {} : { role: "worker" as const }) });
+  const setGroup = (e: { target: { value: string } }) => {
+    const next = e.target.value ? state.groups[e.target.value] : undefined;
+    setForm({ ...form, groupId: e.target.value, ...(next ? { agentGoalId: next.goalId } : { role: "worker" as const }) });
+  };
+  const shell = form.provider === "shell";
+  // A plain managed session starts on its instructions, so they are needed then.
+  const plain = shell || (state.room?.personal === true && form.groupId === "");
+  const needsInstructions = plain && form.managed && !shell;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const { agentGoalId, groupId, repoPath, terminal, ...rest } = form;
-    const repo = repoPath.trim() ? { repoPath: repoPath.trim() } : {};
-    const mode = terminal && rest.provider === "claude" ? { terminal: true } : {};
-    void action.run(() => store.append([draft("agent.created", { ...rest, ...repo, ...mode, agentId: newId(), groupId: groupId || null, goalId: agentGoalId })])).then((ok) => ok && onClose());
+    const repoPath = form.repoPath.trim();
+    if (repoPath) rememberRepoPath(repoPath);
+    void action
+      .run(() =>
+        store.append([
+          draft("agent.created", {
+            agentId: newId(),
+            name: form.name,
+            provider: form.provider,
+            model: "default",
+            runnerId: form.runnerId,
+            groupId: form.groupId || null,
+            role: shell ? "worker" : form.role,
+            goalId: form.agentGoalId,
+            instructions: shell ? "" : form.instructions,
+            ...(repoPath ? { repoPath } : {}),
+            ...(shell || !form.managed ? { terminal: true } : {}),
+          }),
+        ]),
+      )
+      .then((ok) => ok && onClose());
   };
   return (
     <Dialog title={t("overview.newAgent")} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
         {myRunners.length === 0 && <span className="error">{t(inDesktopClient ? "dialog.noRunnerDesktop" : "dialog.noRunnerBrowser")}</span>}
-        <div className="row">
-          <label style={{ flex: 1 }}>
-            {t("agent.group")}
-            <select value={form.groupId} onChange={setGroup}>
-              <option value="">{t("dialog.noGroup")}</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ flex: 1 }}>
-            {t("dialog.role")}
-            <select value={form.role} onChange={set("role")}>
-              {(["worker", "leader", "monitor"] as const).map((r) => (
-                <option key={r} value={r} disabled={takenRoles.has(r)}>
-                  {t(`agent.${r}`)}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="segmented" role="radiogroup" aria-label={t("dialog.kind")}>
+          {KINDS.map((k) => (
+            <button key={k} type="button" role="radio" aria-checked={form.provider === k} className={form.provider === k ? "selected" : ""} onClick={() => setForm({ ...form, provider: k })}>
+              {t(`dialog.kind.${k}`)}
+            </button>
+          ))}
         </div>
         <label>
           {t("dialog.agentName")}
@@ -164,15 +194,8 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
           </div>
         </label>
         {pickError && <span className="error">{pickError}</span>}
-        <div className="row">
-          <label style={{ flex: 1 }}>
-            {t("agent.provider")}
-            <select value={form.provider} onChange={set("provider")}>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
-          </label>
-          <label style={{ flex: 1 }}>
+        {myRunners.length > 1 && (
+          <label>
             {t("dialog.runner")}
             <select value={form.runnerId} onChange={set("runnerId")} required>
               {myRunners.map((r) => (
@@ -182,31 +205,55 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
               ))}
             </select>
           </label>
-        </div>
-        {form.provider === "claude" && (
-          <label className="row" style={{ gap: 8 }}>
-            <input type="checkbox" checked={form.terminal} onChange={(e) => setForm({ ...form, terminal: e.target.checked })} style={{ width: "auto" }} />
-            {t("dialog.terminal")}
-          </label>
         )}
-        <label>
-          {t("dialog.model")}
-          <input required value={form.model} onChange={set("model")} />
-        </label>
-        <label>
-          {t("dialog.agentGoal")}
-          <select value={form.agentGoalId} onChange={set("agentGoalId")}>
-            {goalChoices.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          {t("dialog.instructions")}
-          <textarea rows={4} value={form.instructions} onChange={set("instructions")} />
-        </label>
+        {!shell && (
+          <details className="addon" open={needsInstructions || undefined}>
+            <summary>{t("dialog.coordination")}</summary>
+            <div className="stack">
+              <div className="row">
+                <label style={{ flex: 1 }}>
+                  {t("agent.group")}
+                  <select value={form.groupId} onChange={setGroup}>
+                    <option value="">{t("dialog.noGroup")}</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ flex: 1 }}>
+                  {t("dialog.role")}
+                  <select value={form.role} onChange={set("role")}>
+                    {(["worker", "leader", "monitor"] as const).map((r) => (
+                      <option key={r} value={r} disabled={takenRoles.has(r)}>
+                        {t(`agent.${r}`)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label>
+                {t("dialog.agentGoal")}
+                <select value={form.agentGoalId} onChange={set("agentGoalId")}>
+                  {goalChoices.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {t("dialog.instructions")}
+                <textarea rows={3} value={form.instructions} onChange={set("instructions")} required={needsInstructions} />
+              </label>
+              <label className="row" style={{ gap: 8 }}>
+                <input type="checkbox" checked={form.managed} onChange={(e) => setForm({ ...form, managed: e.target.checked })} style={{ width: "auto" }} />
+                {t("dialog.managed")}
+              </label>
+            </div>
+          </details>
+        )}
         <Actions busy={action.busy || myRunners.length === 0} error={action.error} onClose={onClose} />
       </form>
     </Dialog>

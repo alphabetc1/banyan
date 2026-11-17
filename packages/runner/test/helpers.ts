@@ -79,10 +79,11 @@ export interface RoomFixture {
   rootGoalId: string;
 }
 
-// A null repoUrl makes a room without a shared fork, like a local workspace.
-export async function createRoom(server: TestServer, repoUrl: string | null): Promise<RoomFixture> {
+// A null repoUrl makes a room without a shared fork; personal makes it one person's own
+// workspace, like the desktop client's local one.
+export async function createRoom(server: TestServer, repoUrl: string | null, personal = false): Promise<RoomFixture> {
   const repo = repoUrl === null ? {} : { repoUrl, baseBranch: "main" };
-  const room = await server.post("/api/rooms", { name: "test room", ...repo, goalTitle: "Make the demo better", ownerName: "Rhett" });
+  const room = await server.post("/api/rooms", { name: "test room", ...repo, personal, goalTitle: "Make the demo better", ownerName: "Rhett" });
   const runner = await server.post(`/api/rooms/${room.roomId}/runners`, { hostname: "test" }, room.memberToken);
   const state = await server.state(room.roomId, room.memberToken);
   return { roomId: room.roomId, memberId: room.memberId, memberToken: room.memberToken, runnerId: runner.runnerId, runnerToken: runner.runnerToken, rootGoalId: state.room!.rootGoalId };

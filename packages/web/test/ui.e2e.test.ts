@@ -139,8 +139,15 @@ test("builds the goal tree and group from the UI, then shows live agent state an
   await expect(page.getByTestId("group-prefill team")).toBeVisible();
 
   await page.getByRole("button", { name: "New agent" }).click();
+  // Simple by default: kind, name, repository. Group, role, goal and instructions are in the
+  // coordination section.
+  await expect(page.getByLabel("Model")).toHaveCount(0);
+  await expect(page.getByLabel("Group")).not.toBeVisible();
+  await page.getByRole("radio", { name: "Codex" }).click();
+  await expect(page.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
   await page.getByLabel("Agent name").fill("tok-worker");
-  await page.getByLabel("Provider").selectOption("codex");
+  await page.getByText("Coordination (goal · group · role)").click();
+  await page.getByLabel("Group").selectOption({ label: "prefill team" });
   await page.getByLabel("Instructions").fill("Profile the tokenizer.");
   await page.getByRole("button", { name: "Create" }).click();
   const card = page.getByTestId("agent-card-tok-worker");
@@ -148,30 +155,30 @@ test("builds the goal tree and group from the UI, then shows live agent state an
 
   const state = await serverState(room.roomId, room.token);
   const agent = Object.values(state.agents).find((a) => a.name === "tok-worker")!;
-  expect(agent).toMatchObject({ provider: "codex", runnerId: runner.runnerId, model: "default", instructions: "Profile the tokenizer.", role: "worker" });
+  expect(agent).toMatchObject({ provider: "codex", runnerId: runner.runnerId, model: "default", instructions: "Profile the tokenizer.", role: "worker", terminal: true });
 
   // The runner is not connected yet, so the agent shows as offline.
-  await expect(card.locator(".dot")).toHaveClass(/offline/);
+  await expect(card.locator("[data-icon]")).toHaveAttribute("data-icon", "offline");
   const r = await socket(room.roomId, runner.runnerToken);
   await r.append([draft("agent.process_changed", { agentId: agent.id, process: "running" }), draft("agent.activity_changed", { agentId: agent.id, activity: "working" })]);
   await r.append([draft("agent.phase_reported", { agentId: agent.id, phase: "waiting_gpu", note: "queue 2" })], agent.id);
-  await expect(card.locator(".dot")).toHaveClass(/green/);
+  await expect(card.locator("[data-icon]")).toHaveAttribute("data-icon", "working");
   await expect(card).toContainText("waiting_gpu");
   await expect(card).toContainText("working");
 
   // The overview lists the agent under its group with the same live status.
   await page.getByRole("link", { name: "Overview" }).click();
   const row = page.getByTestId("group-prefill team").getByTestId("agent-row-tok-worker");
-  await expect(row.locator(".dot")).toHaveClass(/green/);
-  await expect(row).toContainText("waiting_gpu · working");
+  await expect(row.locator("[data-icon]")).toHaveAttribute("data-icon", "working");
+  await expect(row).toContainText("Working · waiting_gpu");
   await expect(page.locator(".facts")).toContainText("prefill team");
 
   // Dropping the runner connection turns it offline again without a reload.
   r.ws.close();
-  await expect(row.locator(".dot")).toHaveClass(/offline/);
+  await expect(row.locator("[data-icon]")).toHaveAttribute("data-icon", "offline");
   await page.getByRole("link", { name: "Goals" }).click();
   await page.locator(".tree-item", { hasText: "Faster prefill" }).click();
-  await expect(card.locator(".dot")).toHaveClass(/offline/);
+  await expect(card.locator("[data-icon]")).toHaveAttribute("data-icon", "offline");
 });
 
 test("creates standalone agents without any group and shows them on their goals", async ({ page }) => {
@@ -184,6 +191,7 @@ test("creates standalone agents without any group and shows them on their goals"
 
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByText(/No machine runs your agents/)).toHaveCount(0);
+  await page.getByText("Coordination (goal · group · role)").click();
   await expect(page.getByLabel("Group")).toHaveValue("");
   await expect(page.getByLabel("Role").locator("option[value=leader]")).toBeDisabled();
   await expect(page.getByLabel("Role").locator("option[value=monitor]")).toBeDisabled();
@@ -208,6 +216,7 @@ test("creates standalone agents without any group and shows them on their goals"
   await page.getByRole("button", { name: "Create" }).click();
   await page.getByRole("button", { name: "New agent" }).click();
   await page.getByLabel("Agent name").fill("decode-solo");
+  await page.getByText("Coordination (goal · group · role)").click();
   await page.getByLabel("Agent goal").selectOption({ label: "Faster decode" });
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByTestId("agent-card-decode-solo")).toContainText("→ Faster decode");
@@ -268,6 +277,48 @@ test("approves an agent's request, sends it a message and reads its live transcr
   await expect(page.locator(".entry.user")).toContainText("Rhett · interrupt");
   await expect(page.locator(".entry.user")).toContainText("Use 500 prompts.");
   expect((await serverState(room.roomId, room.token)).messages[messageId]!.deliveredAt).toEqual(expect.any(Number));
+});
+
+test("restarts a stopped agent and removes one after asking, only for its owner", async ({ page, browser }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const [kept, gone] = [newId(), newId()];
+  const common = { groupId: null, runnerId: runner.runnerId, role: "worker" as const, provider: "claude" as const, model: "default", goalId: room.rootGoalId, instructions: "", terminal: true };
+  await member.append([draft("agent.created", { ...common, agentId: kept, name: "kept" }), draft("agent.created", { ...common, agentId: gone, name: "gone" })]);
+  const r = await socket(room.roomId, runner.runnerToken);
+  await r.append([draft("agent.process_changed", { agentId: kept, process: "exited", detail: "claude exited (code 0)" })]);
+
+  await page.getByTestId("agent-row-kept").click();
+  await expect(page.getByTestId("agent-row-kept").locator("[data-icon]")).toHaveAttribute("data-icon", "stopped");
+  const before = (await serverState(room.roomId, room.token)).agents[kept]!.lastEventAt;
+  await page.getByRole("button", { name: "Start again" }).click();
+  await expect.poll(async () => (await serverState(room.roomId, room.token)).agents[kept]!.lastEventAt).toBeGreaterThan(before);
+
+  await page.getByTestId("agent-row-gone").click();
+  await page.getByRole("button", { name: "Remove" }).click();
+  await expect(page.getByRole("dialog", { name: "Remove this agent?" })).toContainText("Its worktree and branch stay");
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+  await expect(page).toHaveURL(`${base}/rooms/${room.roomId}`);
+  await expect(page.getByTestId("agent-row-gone")).toHaveCount(0);
+  await expect(page.getByTestId("agent-row-kept")).toBeVisible();
+  expect((await serverState(room.roomId, room.token)).agents[gone]).toMatchObject({ archived: true });
+
+  // Someone else in the room sees the agent but cannot restart or remove it.
+  const invite = await api(`/api/rooms/${room.roomId}/invites`, {}, room.token);
+  const bob = await api(`/api/rooms/${room.roomId}/join`, { inviteToken: invite.inviteToken, displayName: "Bob" });
+  const other = await browser.newContext();
+  const guest = await other.newPage();
+  await guest.goto(`${base}/`);
+  await guest.evaluate((creds) => {
+    localStorage.setItem("banyan.lang", "en");
+    localStorage.setItem("banyan.rooms", JSON.stringify([creds]));
+  }, { roomId: room.roomId, roomName: "UI e2e room", memberId: bob.memberId, memberToken: bob.memberToken });
+  await guest.goto(`${base}/rooms/${room.roomId}/agents/${kept}`);
+  await expect(guest.locator(".agent-main h2")).toHaveText("kept");
+  await expect(guest.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  await expect(guest.getByRole("button", { name: "Start again" })).toHaveCount(0);
+  await other.close();
 });
 
 test("shows an error instead of loading forever when saved credentials are rejected", async ({ page }) => {

@@ -454,3 +454,28 @@ Rhett 确认的方向：界面和用法像 Orca。默认打开就是本地工作
 
 **实现顺序**：1. 本地工作区（内置 server、可以选本机仓库的 agent）；2. Claude 终端模式；3. 本地和 room 之间的切换、打磨。三步都已完成。
 
+## 24. Codex 终端与「纯本地」agent（2026-11-17）
+
+Rhett 确认的决定：
+
+- **Codex 也走真实的 CLI 终端**。现在的 Codex（0.167）已经有稳定的 hooks，事件和字段与 Claude Code 一致（`UserPromptSubmit.prompt`、`PreToolUse`、`PermissionRequest`、`PostToolUse.tool_response`、`Stop.last_assistant_message`，每个事件都带 `session_id`）。两种 CLI 共用 `TerminalSession`，差异集中在每种 CLI 的 profile 里：启动参数、hooks 的注入方式、会话 id 什么时候能拿到。
+  - Codex 的 hooks 只能是命令，而且必须先由用户信任它的完整定义（按哈希记录）。Banyan 的 hook 定义对所有 agent 都相同（`curl` 把输入转发给 `$BANYAN_HOOK_URL`；变量没设时什么都不做），所以用户只需要在第一次出现的「Hooks need review」里信任一次。不使用 `--dangerously-bypass-hook-trust`，因为它会让仓库自带的 hooks 也不经审核就运行。
+  - 实测确认：`-c hooks.<事件>=[...]` 可以定义 hooks；`mcp_servers.room.url` 和 `mcp_servers.room.default_tools_approval_mode="approve"` 让 Room 工具不用审批；`developer_instructions` 注入协作说明；`codex resume [-c ...] <id> [prompt]` 用来恢复。Codex 不能预先指定会话 id，id 从第一个 hook 里拿。
+- **纯本地 agent**：room 新增 `personal` 标记，客户端的本地工作区就是一个 personal room。personal room 里的独立 agent 就是纯粹的 CLI：没有 Banyan 的协作说明，也没有 Room MCP；如果填了说明就作为第一条消息发送，否则终端打开后等用户输入；恢复时也不会被要求调用 `room_get_context`。托管模式下必须有第一条消息才能启动，界面会要求填写。group 里的 agent 即使在 personal room 里，也保留协作功能。没有 personal 标记的旧本地工作区会被重建，不做兼容（Rhett 确认）。
+- **往终端里输入是有条件的**（实测发现的安全问题）：只有 CLI 已经停在输入框时（已经收到过 hook，而且没有在问用户问题），Banyan 才往终端里输入。否则消息保持待送达，等 hook 表明 CLI 回到输入框后再送。fyi 还要等当前一轮结束（`Stop`），因为两种 CLI 都会把一轮进行中输入的文字并进这一轮；steer 先按 Esc 打断，再输入。之前的实现会在 Codex 弹出更新菜单时把消息输进去，消息末尾的回车会选中默认的「Update now」。这次没有真的更新，是因为全局安装目录属于 root。同样的情况如果发生在审批框上，就等于替用户点了「允许」。
+- 启动阶段识别屏幕上的问题，从第一个 hook 之前一直持续到问题被回答，覆盖：信任文件夹、Codex 的 hook 审核、Codex 的更新菜单。不修改用户的 `check_for_update_on_startup`。
+- Codex 0.167.1 会把发往 127.0.0.1 的请求也交给 macOS 系统代理，代理会返回 502。所有 agent 进程都会在 `NO_PROXY` 里补上回环地址。
+- 测试使用临时的 `CODEX_HOME`（只复制登录凭证 `auth.json`），不往用户真实的 `~/.codex` 里写信任记录。
+
+## 25. 新建 agent 的简化与状态图标（2026-11-17）
+
+Rhett 的要求：
+
+- **新建对话框默认只有三项**：类型（Claude Code / Codex / 终端）、名称、仓库目录。目标、group、角色、补充说明、后台托管（不开终端）都收进默认折叠的「协作设置」。去掉了模型字段（一律用 CLI 自己的默认，在终端里用 `/model` 切换）和「第一条消息」。
+- **仓库目录有记忆**：对话框会预填上次用的仓库（保存在页面的 localStorage）；点「选择…」时，从上次选的位置打开（保存在客户端设置的 `lastRepoDir`）。
+- **纯终端**：新增 `provider: "shell"`，在 agent 的 worktree 里开用户自己的登录 shell（`$SHELL -l`）。它总是终端模式、总是 worker、总是纯本地（没有 Room MCP）；没有 hooks，所以不跟踪一轮一轮的工作，状态只显示「终端」，重启后开一个新 shell。
+- **状态图标**（参考 Claude 手机端）：工作中是黑色转圈，已完成/空闲是绿色对勾，需要你是黄色小手掌，出错是红色叹号，启动中是灰色转圈，离线是灰色虚线圆，已停止是灰色圆里一横，终端是 `>_`。由 `agentIcon()` 统一推导，列表、agent 页、目标页、Worktree 页、协调页都用同一套图标，去掉了原来的圆点。
+- 终端启动后，如果既没有问问题、也还没有任何 hook，就算停在输入框（报告空闲），不会一直显示「启动中」。
+- **删除与重新启动**（Rhett 反馈：独立 agent 删不掉，退出终端后就成了僵尸终端）：新增事件 `agent.archived` 和 `agent.restart_requested`，只有 agent 的主人或 room 的 owner 可以操作。删除后会话结束，不再启动，也不再出现在列表和收件箱里；它在 group 里的 leader/monitor 位置会腾出来；**worktree 和分支保留**，删除 agent 不会删掉代码。CLI 正常退出（`/exit`、shell 里的 `exit`）不算崩溃，不会自动重启；终端关闭的提示上有「重新启动」，agent 页顶部有「重新启动 / 删除」，删除前会确认。
+- 本地工作区（personal room）的导航只保留「总览」和「Worktree」；目标、结论、协调这些协作页面只在团队 room 里显示。
+

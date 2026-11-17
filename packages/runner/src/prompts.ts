@@ -51,6 +51,13 @@ export function kickoffMessage(state: RoomState, agent: Agent): string {
   return `Start working on your goal: ${goal?.title ?? agent.goalId}.${goal?.description ? `\n\n${goal.description}` : ""}\n\nBegin by calling room_get_context.`;
 }
 
+// What a plain agent starts with: its instructions, if any. A resumed terminal waits for its
+// person; a resumed managed session needs a message to continue on.
+export function plainFirstMessage(agent: Agent, resumed: boolean): string | null {
+  if (resumed) return agent.terminal ? null : "The session was restarted. Continue where you left off.";
+  return agent.instructions.trim() || null;
+}
+
 export const RESUMED_MESSAGE = "The Banyan runner restarted and resumed this session. Call room_get_context to catch up, then continue your work.";
 
 export function freshAfterLossMessage(state: RoomState, agent: Agent, reason: string): string {

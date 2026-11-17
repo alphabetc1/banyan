@@ -30,9 +30,10 @@ export interface DesktopBridge {
   setServerUrl(url: string): Promise<void>;
   // Credentials of the client's own local workspace; only given to pages it serves itself.
   localWorkspace(): Promise<{ roomId: string; roomName: string; memberId: string; memberToken: string } | null>;
-  // Lets the person pick a git repository on this machine; resolves to its top-level path, or
-  // null when cancelled. Rejects when the folder is not inside a git repository.
-  pickRepository(): Promise<string | null>;
+  // Lets the person pick a git repository on this machine, starting in startIn if given (the
+  // last one used); resolves to its top-level path, or null when cancelled. Rejects when the
+  // folder is not inside a git repository.
+  pickRepository(startIn: string | null): Promise<string | null>;
   openLocalWorkspace(): void;
   // Connects to the terminal of a terminal-mode agent hosted by this machine's runner for the
   // room. onData first receives recent output, then every new chunk; onClose fires when the

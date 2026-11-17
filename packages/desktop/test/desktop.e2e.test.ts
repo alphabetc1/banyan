@@ -88,6 +88,13 @@ async function connectAndCreateRoom(page: Page, fork = createFork()): Promise<st
   return new URL(page.url()).pathname.split("/")[2]!;
 }
 
+// The transcript of an agent in the app's local workspace, oldest first.
+async function localTranscript(localBase: string, roomId: string, agentId: string, token: string): Promise<{ kind: string; text: string }[]> {
+  const res = await fetch(`${localBase}/api/rooms/${roomId}/agents/${agentId}/transcript?limit=200`, { headers: { authorization: `Bearer ${token}` } });
+  const { events } = (await res.json()) as { events: { payload: { entries: { kind: string; text: string }[] } }[] };
+  return [...events].reverse().flatMap((e) => e.payload.entries);
+}
+
 const lockPath = (roomId: string) => join(banyanHome, "rooms", roomId, "runner.lock");
 
 const memberToken = (page: Page) => page.evaluate(() => (JSON.parse(localStorage.getItem("banyan.rooms")!) as { memberToken: string }[])[0]!.memberToken);
@@ -106,7 +113,8 @@ test("connects to a room server, hosts a runner, keeps it in the tray and restor
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByText(/No machine runs your agents/)).toHaveCount(0);
-  await expect(page.getByLabel("Your runner")).toContainText(hostname());
+  // With one runner, there is nothing to choose: the field stays hidden and that runner is used.
+  await expect(page.getByLabel("Your runner")).toHaveCount(0);
   await page.getByRole("button", { name: "Cancel" }).click();
   const saved = savedRunner(roomId);
   expect(saved.serverUrl).toBe(server.base);
@@ -176,16 +184,21 @@ test("opens a local workspace on first launch and runs agents in a repository on
   const roomId = settingsFile().localWorkspace.roomId;
   await expect(page).toHaveURL(`${localBase}/rooms/${roomId}`);
   await expect(page.getByLabel("Room").locator("option:checked")).toHaveText("Local");
+  // Coordination pages are left out of a personal workspace.
+  await expect(page.getByRole("link", { name: "Worktrees" })).toBeVisible();
+  for (const name of ["Goals", "Findings", "Coordination"]) await expect(page.getByRole("link", { name })).toHaveCount(0);
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
 
   await page.getByRole("button", { name: "New agent" }).click();
   const repoField = page.getByLabel("Repository on the runner's machine");
   await expect(repoField).toHaveAttribute("required", "");
   await repoField.fill(repo);
-  // A managed session here; the terminal has its own test.
-  await page.getByLabel(/Run in Claude Code's own terminal/).uncheck();
   await page.getByLabel("Agent name").fill("local-worker");
-  await page.getByLabel("Instructions").fill('This is an automated test of Banyan. Call room_set_status with phase "done", then reply DONE. Do nothing else.');
+  // A managed session here (the terminal has its own test), which starts on its instructions.
+  await page.getByText("Coordination (goal · group · role)").click();
+  await page.getByLabel(/Managed, without a terminal/).check();
+  await expect(page.getByLabel("Instructions")).toHaveAttribute("required", "");
+  await page.getByLabel("Instructions").fill("Reply with exactly the word LOCAL-OK and nothing else.");
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByTestId("agent-row-local-worker")).toBeVisible();
 
@@ -194,11 +207,14 @@ test("opens a local workspace on first launch and runs agents in a repository on
     const res = await fetch(`${localBase}/api/rooms/${roomId}/state`, { headers: { authorization: `Bearer ${token}` } });
     return ((await res.json()) as { state: import("@banyan/shared").RoomState }).state;
   };
-  const agent = await waitFor(async () => {
-    const a = Object.values((await state()).agents).find((x) => x.name === "local-worker");
-    return a?.phase?.value === "done" ? a : null;
-  }, "the local agent reporting done", 5 * 60_000, 1000);
-  expect(agent).toMatchObject({ repoPath: repo, groupId: null });
+  const agent = await waitFor(async () => Object.values((await state()).agents).find((x) => x.name === "local-worker"), "the local agent");
+  // A plain session: it answers its first message, with no Banyan coordination around it.
+  const texts = await waitFor(async () => {
+    const t = await localTranscript(localBase, roomId, agent.id, token);
+    return t.some((e) => e.kind === "assistant" && e.text.includes("LOCAL-OK")) ? t : null;
+  }, "the local agent's reply", 5 * 60_000, 1000);
+  expect(texts.some((e) => e.text.includes("room_"))).toBe(false);
+  expect((await state()).agents[agent.id]).toMatchObject({ repoPath: repo, groupId: null });
   const worktreePath = join(banyanHome, "rooms", roomId, "worktrees", agent.id);
   expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" })).toContain(worktreePath);
   expect(execFileSync("git", ["ls-remote", "--heads", remote], { encoding: "utf8" })).not.toContain("banyan/");
@@ -415,11 +431,10 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
 
   await page.getByRole("button", { name: "New agent" }).click();
-  // Claude agents default to the terminal in the desktop client.
-  await expect(page.getByLabel(/Run in Claude Code's own terminal/)).toBeChecked();
+  // By default: Claude Code in its own terminal, nothing to fill but a name and a repository.
+  await expect(page.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
   await page.getByLabel("Repository on the runner's machine").fill(repo);
   await page.getByLabel("Agent name").fill("term-agent");
-  await page.getByLabel("Instructions").fill('This is an automated test of Banyan. Call room_set_status with phase "terminal-ok", then reply DONE and wait.');
   await page.getByRole("button", { name: "Create" }).click();
   await page.getByTestId("agent-row-term-agent").click();
   const terminal = page.getByTestId("terminal");
@@ -439,19 +454,58 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
     return Object.values(state.agents).find((a) => a.name === "term-agent");
   };
   // The repository is in a folder Claude Code has never trusted; the person answers in the
-  // terminal, and the list shows the agent waiting for them meanwhile.
+  // terminal, and the list shows a raised hand meanwhile.
+  const icon = page.getByTestId("agent-row-term-agent").locator("[data-icon]");
   await expect(terminal).toContainText(/trust this folder/i, { timeout: 60_000 });
-  await expect(page.getByTestId("agent-row-term-agent")).toContainText("waiting for you in its terminal");
+  await expect(icon).toHaveAttribute("data-icon", "needs_you");
   await terminal.click();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await waitFor(async () => (await agentState())?.phase?.value === "terminal-ok", "the terminal agent reporting through the Room MCP", 5 * 60_000, 1000);
-  await waitFor(async () => (await agentState())?.activity === "idle", "the turn to end", 2 * 60_000, 500);
+  // Then Claude Code waits at its prompt, with nothing sent to it by Banyan.
+  await expect(icon).toHaveAttribute("data-icon", "done", { timeout: 60_000 });
+  const agentId = (await agentState())!.id;
+  const transcript = () => localTranscript(localBase, roomId, agentId, token);
+  expect((await transcript()).filter((e) => e.kind === "user")).toEqual([]);
 
-  // Typing into the terminal talks to Claude Code directly.
+  // Typing into the terminal talks to Claude Code directly; the list follows its turn.
   await terminal.click();
-  await page.keyboard.type('Call room_set_status with phase "typed-ok".');
+  await page.keyboard.type("Reply with exactly the word TYPED-OK and nothing else.");
   await page.keyboard.press("Enter");
-  await waitFor(async () => (await agentState())?.phase?.value === "typed-ok", "the agent acting on typed input", 5 * 60_000, 1000);
-  await expect(terminal).toContainText("typed-ok");
+  await waitFor(async () => (await transcript()).some((e) => e.kind === "assistant" && e.text.includes("TYPED-OK")), "the agent acting on typed input", 5 * 60_000, 1000);
+  await expect(terminal).toContainText("TYPED-OK");
+  await expect(icon).toHaveAttribute("data-icon", "done");
+  // A plain session: Claude Code got just what the person typed, without Banyan's coordination.
+  expect((await transcript()).filter((e) => e.kind === "user").map((e) => e.text)).toEqual(["Reply with exactly the word TYPED-OK and nothing else."]);
+
+  // The next agent starts in the same repository, and a plain terminal runs the person's shell.
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.getByLabel("Repository on the runner's machine")).toHaveValue(repo);
+  await page.getByRole("radio", { name: "Terminal" }).click();
+  await expect(page.getByText("Coordination (goal · group · role)")).toHaveCount(0);
+  await page.getByLabel("Agent name").fill("shell");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("agent-row-shell").click();
+  await expect(page.getByTestId("agent-row-shell").locator("[data-icon]")).toHaveAttribute("data-icon", "terminal", { timeout: 60_000 });
+  const shellTerminal = page.getByTestId("terminal");
+  await shellTerminal.click();
+  await page.keyboard.type("echo BANYAN-$((40+2))");
+  await page.keyboard.press("Enter");
+  await expect(shellTerminal).toContainText("BANYAN-42");
+
+  // Exiting the shell leaves a closed terminal that can be started again, or removed.
+  await page.keyboard.type("exit");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("terminal-restart")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("agent-row-shell").locator("[data-icon]")).toHaveAttribute("data-icon", "stopped");
+  await page.getByTestId("terminal-restart").click();
+  await expect(page.getByTestId("agent-row-shell").locator("[data-icon]")).toHaveAttribute("data-icon", "terminal", { timeout: 30_000 });
+  await expect(page.getByTestId("terminal-restart")).toHaveCount(0);
+  await page.getByTestId("terminal").click();
+  await page.keyboard.type("echo AGAIN-$((1+1))");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("terminal")).toContainText("AGAIN-2");
+  await page.getByRole("button", { name: "Remove" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
+  await expect(page.getByTestId("agent-row-shell")).toHaveCount(0);
+  await expect(page.getByTestId("agent-row-term-agent")).toBeVisible();
 });

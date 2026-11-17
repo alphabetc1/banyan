@@ -9,9 +9,11 @@ export interface Settings {
   localWorkspace: LocalWorkspace | null;
   lastOpened: "local" | "team";
   enabledRooms: string[];
+  // The repository picked last, where the picker opens next.
+  lastRepoDir: string | null;
 }
 
-const DEFAULTS: Settings = { serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [] };
+const DEFAULTS: Settings = { serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null };
 
 export class SettingsFile {
   private value: Settings;

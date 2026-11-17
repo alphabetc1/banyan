@@ -2,7 +2,7 @@
 // onto that or a team room server, and the runners for the rooms this machine hosts.
 // Closing the window keeps runners going in the tray; quitting stops them gracefully.
 import { execFile } from "node:child_process";
-import { hostname, userInfo } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -127,13 +127,16 @@ async function enableRunner(serverUrl: string, roomId: string, memberToken: stri
   runners.start(roomId);
 }
 
-// The folder the person picks, as the top level of the git repository it belongs to.
-async function pickRepository(): Promise<string | null> {
-  const picked = await dialog.showOpenDialog(showWindow(), { properties: ["openDirectory"], title: zh() ? "选择仓库" : "Choose a repository" });
+// The folder the person picks, as the top level of the git repository it belongs to. The
+// dialog opens where they picked last, or at startIn.
+async function pickRepository(startIn: string | null): Promise<string | null> {
+  const defaultPath = startIn ? startIn.replace(/^~(?=$|\/)/, homedir()) : settings.get().lastRepoDir ?? undefined;
+  const picked = await dialog.showOpenDialog(showWindow(), { properties: ["openDirectory"], title: zh() ? "选择仓库" : "Choose a repository", ...(defaultPath ? { defaultPath } : {}) });
   const folder = picked.filePaths[0];
   if (picked.canceled || !folder) return null;
   try {
     const { stdout } = await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: folder, env: runnerEnv() });
+    settings.update({ lastRepoDir: stdout.trim() });
     return stdout.trim();
   } catch {
     throw new Error(`${zh() ? "不是 git 仓库" : "not a git repository"}: ${folder}`);
@@ -230,7 +233,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle("runners:disable", guard((roomId: string) => disableRunner(roomId)));
     ipcMain.handle("settings:server-url", guard((url: string) => setServerUrl(url)));
     ipcMain.handle("local:workspace", (e) => (fromLocalWorkspace(e) ? settings.get().localWorkspace : null));
-    ipcMain.handle("repo:pick", guard(() => pickRepository()));
+    ipcMain.handle("repo:pick", guard((startIn: string | null) => pickRepository(startIn)));
     ipcMain.on("terminal:open", (e, req: { roomId: string; agentId: string }) => {
       const port = e.ports[0];
       if (!port) return;
@@ -281,7 +284,10 @@ async function openLocalWorkspace(): Promise<void> {
   const port = process.env.BANYAN_LOCAL_PORT ? Number(process.env.BANYAN_LOCAL_PORT) : DEFAULT_LOCAL_PORT;
   localServer = await startLocalServer({ dataDir: app.getPath("userData"), webDir: join(here, "web"), port });
   const names = zh() ? { room: "本地", goal: "本地工作", owner: userInfo().username } : { room: "Local", goal: "Local work", owner: userInfo().username };
-  const workspace = await ensureLocalWorkspace(localServer.url, settings.get().localWorkspace, names);
+  const previous = settings.get().localWorkspace;
+  const workspace = await ensureLocalWorkspace(localServer.url, previous, names);
+  // A replaced workspace's runner is no longer started.
+  if (previous && previous.roomId !== workspace.roomId) settings.update({ enabledRooms: settings.get().enabledRooms.filter((r) => r !== previous.roomId) });
   settings.update({ localWorkspace: workspace });
   await enableRunner(localServer.url, workspace.roomId, workspace.memberToken);
 }

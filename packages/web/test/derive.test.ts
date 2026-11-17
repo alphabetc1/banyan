@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, authorize, draft, emptyRoomState, type Actor, type EventDraft, type RoomState } from "@banyan/shared";
-import { agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
+import { agentIcon, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
 import { MESSAGES, reasonText } from "../src/i18n.ts";
 
 const NOW = 2_000_000_000_000;
@@ -114,6 +114,32 @@ describe("derive", () => {
     expect(standaloneAgentsInSubtree(s, "root").map((a) => a.id)).toEqual(["s-root", "s-tok", "s-decode"]);
     expect(standaloneAgentsInSubtree(s, "prefill").map((a) => a.id)).toEqual(["s-tok"]);
     expect(standaloneAgentsInSubtree(s, "decode").map((a) => a.id)).toEqual(["s-decode"]);
+  });
+
+  it("shows each agent as one icon: needs you, working, done, error, offline, stopped, starting, terminal", () => {
+    const s = room();
+    const report = (agentId: string, d: EventDraft, actor: Actor = RUNNER) => applyEvent(s, { ...d, seq: s.lastSeq + 1, roomId: "room", ts: NOW, actor });
+    const icon = (id: string, online = ["r1"]) => agentIcon(s, s.agents[id]!, online, NOW);
+    // w is running with unknown activity: still starting up.
+    expect(icon("w")).toBe("starting");
+    report("w", draft("agent.activity_changed", { agentId: "w", activity: "working" }));
+    expect(icon("w")).toBe("working");
+    report("w", draft("agent.activity_changed", { agentId: "w", activity: "idle" }));
+    expect(icon("w")).toBe("done");
+    report("w", draft("agent.activity_changed", { agentId: "w", activity: "awaiting_input" }));
+    expect(icon("w")).toBe("needs_you");
+    report("w", draft("agent.activity_changed", { agentId: "w", activity: "working" }));
+    report("w", draft("approval.requested", { approvalId: "a9", agentId: "w", tool: "Bash", input: "ls" }));
+    expect(icon("w")).toBe("needs_you");
+    expect(icon("w", [])).toBe("offline");
+    report("l", draft("agent.process_changed", { agentId: "l", process: "crashed", detail: "boom" }));
+    expect(icon("l")).toBe("error");
+    report("m", draft("agent.process_changed", { agentId: "m", process: "exited" }));
+    expect(icon("m")).toBe("stopped");
+    report("x", draft("agent.created", { ...agentBase, agentId: "sh", groupId: null, name: "sh", role: "worker", provider: "shell", goalId: "root", terminal: true }), OWNER);
+    expect(icon("sh")).toBe("starting");
+    report("sh", draft("agent.process_changed", { agentId: "sh", process: "running" }));
+    expect(icon("sh")).toBe("terminal");
   });
 
   it("keys attention items by what they are about", () => {

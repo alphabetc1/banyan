@@ -146,7 +146,7 @@ class CodexSession implements AgentSession {
       approvalPolicy: this.host.approvalPolicy,
       sandbox: this.host.sandbox,
       developerInstructions: this.spec.systemPrompt,
-      config: { mcp_servers: { [ROOM_SERVER]: { url: this.spec.roomMcpUrl } } },
+      config: this.spec.roomMcpUrl ? { mcp_servers: { [ROOM_SERVER]: { url: this.spec.roomMcpUrl } } } : {},
     };
     const result = this.spec.resumeSessionId
       ? await server.request("thread/resume", { ...common, threadId: this.spec.resumeSessionId, excludeTurns: true })

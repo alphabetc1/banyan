@@ -65,11 +65,11 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function setup(script: Script, opts: { createAgent?: boolean; store?: LocalStore; repoUrl?: string | null } = {}) {
+async function setup(script: Script, opts: { createAgent?: boolean; store?: LocalStore; repoUrl?: string | null; personal?: boolean } = {}) {
   const server = new TestServer();
   await server.start();
   cleanups.push(() => server.stop());
-  const room = await createRoom(server, opts.repoUrl === undefined ? createFork() : opts.repoUrl);
+  const room = await createRoom(server, opts.repoUrl === undefined ? createFork() : opts.repoUrl, opts.personal);
   const groupId = newId();
   const agentId = newId();
   const roomDir = tempDir("supervisor");
@@ -177,6 +177,44 @@ describe("Supervisor", () => {
     expect(execFileSync("git", ["branch", "-a", "--list", "*banyan*"], { cwd: repo, encoding: "utf8" })).not.toContain("remotes/");
     expect(execFileSync("git", ["ls-remote", "--heads", remote], { encoding: "utf8" })).not.toContain("banyan/");
     expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
+  });
+
+  it("runs standalone agents of a personal workspace as plain sessions, and grouped ones with Banyan", async () => {
+    const t = await setup({}, { createAgent: true, personal: true });
+    const plainId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { agentId: plainId, groupId: null, runnerId: t.room.runnerId, name: "plain", role: "worker", provider: "claude", model: "default", goalId: t.room.rootGoalId, instructions: "  Fix the flaky test.  " }),
+    ]);
+    await t.supervisor.start();
+    await waitFor(async () => {
+      const s = await t.serverState();
+      return s.agents[plainId]?.process === "running" && s.agents[t.agentId]?.process === "running";
+    }, "both agents running");
+    const byAgent = (id: string) => t.provider.sessions[t.provider.specs.findIndex((spec) => spec.agentId === id)]!;
+    const plainSpec = t.provider.specs.find((s) => s.agentId === plainId)!;
+    expect(plainSpec).toMatchObject({ systemPrompt: null, roomMcpUrl: null });
+    expect(byAgent(plainId).sent).toEqual([{ text: "Fix the flaky test.", delivery: "steer" }]);
+    // The leader of a group keeps Banyan's coordination even in a personal workspace.
+    const leaderSpec = t.provider.specs.find((s) => s.agentId === t.agentId)!;
+    expect(leaderSpec.systemPrompt).toContain("You are an agent in a Banyan room");
+    expect(leaderSpec.roomMcpUrl).toContain(t.agentId);
+    expect(byAgent(t.agentId).sent[0]!.text).toContain("room_get_context");
+  });
+
+  it("does not start a plain managed agent without instructions", async () => {
+    const t = await setup({}, { createAgent: false, personal: true });
+    const plainId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { agentId: plainId, groupId: null, runnerId: t.room.runnerId, name: "plain", role: "worker", provider: "codex", model: "default", goalId: t.room.rootGoalId, instructions: "" }),
+    ]);
+    await t.supervisor.start();
+    const agent = await waitFor(async () => {
+      const a = (await t.serverState()).agents[plainId];
+      return a?.process === "crashed" ? a : null;
+    }, "start failure");
+    expect(agent.processDetail).toBe("failed to start: a managed agent needs instructions to start with; add instructions or run it in a terminal");
+    expect(t.provider.specs).toEqual([]);
+    expect(t.log.lines.map((l) => l.level)).toEqual(["error"]);
   });
 
   it("expands ~ in a local repository path", async () => {

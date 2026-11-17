@@ -1,9 +1,10 @@
 // What each agent is exploring: worktrees grouped by goal, with direction, diff and latest finding.
 import { useContext } from "react";
 import { goalPath, type Worktree } from "@banyan/shared";
-import { StatusDot, timeAgo, useNow } from "../components/common.tsx";
+import { timeAgo, useNow } from "../components/common.tsx";
+import { StatusIcon } from "../components/status-icon.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus, latestPost } from "../derive.ts";
+import { agentIcon, latestPost } from "../derive.ts";
 import { LanguageContext, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -64,7 +65,7 @@ export function WorktreesPage() {
               return (
                 <a key={wt.id} className="card" data-testid={`worktree-${agent.name}`} {...linkProps(`/rooms/${store.roomId}/agents/${agent.id}`)}>
                   <div className="name">
-                    <StatusDot level={agentStatus(state, agent, store.onlineRunnerIds, now).level} />
+                    <StatusIcon kind={agentIcon(state, agent, store.onlineRunnerIds, now)} />
                     {agent.name}
                     <span style={{ flex: 1 }} />
                     <span className="faint">{timeAgo(wt.updatedAt, now, lang)}</span>

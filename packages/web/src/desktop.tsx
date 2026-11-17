@@ -20,9 +20,9 @@ export async function adoptLocalWorkspace(): Promise<void> {
   if (local && !roomCredentials(local.roomId)) saveRoom(local);
 }
 
-export async function pickRepository(): Promise<string | null> {
+export async function pickRepository(startIn: string): Promise<string | null> {
   if (!desktop) return null;
-  return desktop.pickRepository().catch((e: Error) => Promise.reject(bridgeError(e)));
+  return desktop.pickRepository(startIn || null).catch((e: Error) => Promise.reject(bridgeError(e)));
 }
 
 export function openLocalWorkspace(): void {

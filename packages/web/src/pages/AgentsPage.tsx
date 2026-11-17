@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { pendingApprovalCount, type Agent, type RoomState } from "@banyan/shared";
 import { AttentionInbox } from "../components/attention.tsx";
-import { ROLE_MARK, StatusDot, useNow } from "../components/common.tsx";
+import { ROLE_MARK, useNow } from "../components/common.tsx";
+import { StatusIcon } from "../components/status-icon.tsx";
 import { NewAgentDialog } from "../components/dialogs.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus, attentionItems, groupAgents, groupsInSubtree, standaloneAgentsInSubtree } from "../derive.ts";
+import { agentIcon, agentStatus, attentionItems, groupAgents, groupsInSubtree, standaloneAgentsInSubtree } from "../derive.ts";
 import { useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -38,11 +39,12 @@ function AgentRow({ agent, selected }: { agent: Agent; selected: boolean }) {
   const now = useNow();
   const state = store.state!;
   const status = agentStatus(state, agent, store.onlineRunnerIds, now);
+  const icon = agentIcon(state, agent, store.onlineRunnerIds, now);
   const approvals = pendingApprovalCount(state, agent.id);
   return (
     <a className={`agent-row ${selected ? "selected" : ""}`} data-testid={`agent-row-${agent.name}`} {...linkProps(`/rooms/${store.roomId}/agents/${agent.id}`)}>
       <div className="row" style={{ gap: 8 }}>
-        <StatusDot level={status.level} title={status.reasons.map(reasonText).join("; ")} />
+        <StatusIcon kind={icon} title={status.reasons.map(reasonText).join("; ") || undefined} />
         {ROLE_MARK[agent.role] && <span title={t(`agent.${agent.role}`)}>{ROLE_MARK[agent.role]}</span>}
         <span className="name">{agent.name}</span>
         {approvals > 0 && (
@@ -50,11 +52,9 @@ function AgentRow({ agent, selected }: { agent: Agent; selected: boolean }) {
             {approvals}
           </span>
         )}
-        <span className="faint">{agent.provider}</span>
+        <span className="faint">{t(`dialog.kind.${agent.provider}`)}</span>
       </div>
-      <div className="faint detail">
-        {agent.phase?.value ?? t("agent.noPhase")} · {agent.process === "starting" ? t("process.starting") : t(`activity.${agent.activity}`)}
-      </div>
+      <div className="faint detail">{agent.phase ? `${t(`icon.${icon}`)} · ${agent.phase.value}` : t(`icon.${icon}`)}</div>
     </a>
   );
 }

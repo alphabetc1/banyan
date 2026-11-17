@@ -5,7 +5,8 @@ import { z } from "zod";
 export const AgentRole = z.enum(["leader", "monitor", "worker"]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
-export const Provider = z.enum(["claude", "codex"]);
+// shell is a plain terminal running the person's own shell in the agent's worktree.
+export const Provider = z.enum(["claude", "codex", "shell"]);
 export type Provider = z.infer<typeof Provider>;
 
 export const GoalStatus = z.enum(["open", "done", "abandoned"]);
@@ -73,7 +74,9 @@ export const EventDraft = z.discriminatedUnion("type", [
     "room.created",
     // repoUrl and baseBranch are null for a room without a shared fork, such as a local
     // workspace, whose agents each work in a repository on their runner's machine.
-    z.object({ name: ShortText, repoUrl: ShortText.nullable(), baseBranch: ShortText.nullable(), rootGoalId: Id, rootGoalTitle: ShortText, rootGoalDescription: LongText }),
+    // personal marks one person's own workspace, such as the desktop client's local one:
+    // its standalone agents run as plain Claude Code or Codex, without Banyan's coordination.
+    z.object({ name: ShortText, repoUrl: ShortText.nullable(), baseBranch: ShortText.nullable(), personal: z.boolean().optional(), rootGoalId: Id, rootGoalTitle: ShortText, rootGoalDescription: LongText }),
   ),
   variant("member.joined", z.object({ memberId: Id, displayName: ShortText, role: z.enum(["owner", "member"]) })),
   variant("runner.registered", z.object({ runnerId: Id, memberId: Id, hostname: ShortText })),
@@ -100,6 +103,10 @@ export const EventDraft = z.discriminatedUnion("type", [
     }),
   ),
   variant("agent.session_bound", z.object({ agentId: Id, providerSessionId: Id })),
+  // A person removes the agent: its session ends for good; its worktree and branch stay.
+  variant("agent.archived", z.object({ agentId: Id })),
+  // A person asks for a stopped agent to run again, resuming its session if it has one.
+  variant("agent.restart_requested", z.object({ agentId: Id })),
   variant("agent.process_changed", z.object({ agentId: Id, process: ProcessState, detail: LongText.optional() })),
   variant("agent.activity_changed", z.object({ agentId: Id, activity: Activity })),
   variant("agent.resumability_changed", z.object({ agentId: Id, resumability: Resumability, detail: LongText.optional() })),

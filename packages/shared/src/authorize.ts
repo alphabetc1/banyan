@@ -62,12 +62,22 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       if (!runner) return `unknown runner ${p.runnerId}`;
       if (runner.memberId !== actor.id) return "members may only start agents on their own runners";
       if (!state.goals[p.goalId]) return `unknown goal ${p.goalId}`;
+      if (p.provider === "shell" && (p.role !== "worker" || p.terminal !== true)) return "a shell is a worker in a terminal";
       if (p.groupId === null) return p.role === "worker" ? null : "only workers may be standalone; leaders and monitors belong to a group";
       const group = state.groups[p.groupId];
       if (!group) return `unknown group ${p.groupId}`;
       if (!isGoalWithin(state, p.goalId, group.goalId)) return "agent goal must lie within its group's goal";
       if (p.role === "leader" && group.leaderAgentId !== null) return "group already has a leader";
       if (p.role === "monitor" && group.monitorAgentId !== null) return "group already has a monitor";
+      return null;
+    }
+    case "agent.archived":
+    case "agent.restart_requested": {
+      const agent = state.agents[draft.payload.agentId];
+      if (!agent) return `unknown agent ${draft.payload.agentId}`;
+      if (agent.archived) return "the agent has been removed";
+      if (actor.kind !== "member") return "only people may remove or restart agents";
+      if (agent.memberId !== actor.id && state.members[actor.id]?.role !== "owner") return "only the agent's owner or the room owner may do this";
       return null;
     }
     case "agent.session_bound":

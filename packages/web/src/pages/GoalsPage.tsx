@@ -2,10 +2,11 @@
 import { useState } from "react";
 import type { Agent, RoomState } from "@banyan/shared";
 import { AttentionInbox } from "../components/attention.tsx";
-import { ROLE_MARK, StatusDot, useNow } from "../components/common.tsx";
+import { ROLE_MARK, useNow } from "../components/common.tsx";
+import { StatusIcon } from "../components/status-icon.tsx";
 import { NewAgentDialog, NewGoalDialog, NewGroupDialog } from "../components/dialogs.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type GoalNode } from "../derive.ts";
+import { agentIcon, agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type GoalNode } from "../derive.ts";
 import { useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -50,7 +51,7 @@ function AgentCard({ state, agent, homeGoalId, online, now }: { state: RoomState
   return (
     <a className="card" data-testid={`agent-card-${agent.name}`} {...linkProps(`/rooms/${store.roomId}/agents/${agent.id}`)}>
       <div className="name">
-        <StatusDot level={status.level} title={status.reasons.map(reasonText).join("; ")} />
+        <StatusIcon kind={agentIcon(state, agent, online, now)} title={status.reasons.map(reasonText).join("; ") || undefined} />
         {ROLE_MARK[agent.role] && <span title={t(`agent.${agent.role}`)}>{ROLE_MARK[agent.role]}</span>}
         <span>{agent.name}</span>
         <span className="spacer" style={{ flex: 1 }} />

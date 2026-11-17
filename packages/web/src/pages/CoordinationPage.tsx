@@ -1,8 +1,9 @@
 // Leaders and monitors per group, and the message stream between agents and people.
 import { useContext } from "react";
-import { StatusDot, timeAgo, useNow } from "../components/common.tsx";
+import { timeAgo, useNow } from "../components/common.tsx";
+import { StatusIcon } from "../components/status-icon.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { actorName, agentStatus } from "../derive.ts";
+import { actorName, agentIcon } from "../derive.ts";
 import { LanguageContext, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -29,7 +30,7 @@ export function CoordinationPage() {
               if (!agent) return null;
               return (
                 <a key={agent.id} className="row" style={{ textDecoration: "none" }} {...linkProps(`/rooms/${store.roomId}/agents/${agent.id}`)}>
-                  <StatusDot level={agentStatus(state, agent, store.onlineRunnerIds, now).level} />
+                  <StatusIcon kind={agentIcon(state, agent, store.onlineRunnerIds, now)} />
                   <span>{agent.name}</span>
                   <span className="pill">{t(`agent.${agent.role}`)}</span>
                 </a>

@@ -34,6 +34,7 @@ const CreateRoomBody = z
     goalTitle: z.string().min(1).max(500),
     goalDescription: z.string().max(20_000).default(""),
     ownerName: z.string().min(1).max(100),
+    personal: z.boolean().default(false),
   })
   .refine((b) => (b.repoUrl === null) === (b.baseBranch === null), { message: "repoUrl and baseBranch go together" });
 const JoinBody = z.object({ inviteToken: z.string().min(1), displayName: z.string().min(1).max(100) });
@@ -109,7 +110,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     const memberId = newId();
     const b = body.data;
     rooms.append(roomId, { kind: "system" }, [
-      draft("room.created", { name: b.name, repoUrl: b.repoUrl, baseBranch: b.baseBranch, rootGoalId: newId(), rootGoalTitle: b.goalTitle, rootGoalDescription: b.goalDescription }),
+      draft("room.created", { name: b.name, repoUrl: b.repoUrl, baseBranch: b.baseBranch, personal: b.personal, rootGoalId: newId(), rootGoalTitle: b.goalTitle, rootGoalDescription: b.goalDescription }),
       draft("member.joined", { memberId, displayName: b.ownerName, role: "owner" }),
     ]);
     const memberToken = store.issueToken({ kind: "member", roomId, subjectId: memberId }, null);

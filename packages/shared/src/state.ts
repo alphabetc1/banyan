@@ -21,6 +21,8 @@ export interface Room {
   // Both null when the room has no shared fork.
   repoUrl: string | null;
   baseBranch: string | null;
+  // One person's own workspace; see room.created.
+  personal: boolean;
   rootGoalId: string;
   createdAt: number;
 }
@@ -76,6 +78,8 @@ export interface Agent {
   repoPath: string | null;
   // Runs in the provider's own terminal UI; see agent.created.
   terminal: boolean;
+  // Removed by a person; kept for history but no longer run or listed.
+  archived: boolean;
   providerSessionId: string | null;
   process: ProcessState;
   processDetail: string | null;
@@ -176,7 +180,7 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
   switch (e.type) {
     case "room.created": {
       const p = e.payload;
-      state.room = { id: e.roomId, name: p.name, repoUrl: p.repoUrl, baseBranch: p.baseBranch, rootGoalId: p.rootGoalId, createdAt: e.ts };
+      state.room = { id: e.roomId, name: p.name, repoUrl: p.repoUrl, baseBranch: p.baseBranch, personal: p.personal ?? false, rootGoalId: p.rootGoalId, createdAt: e.ts };
       state.goals[p.rootGoalId] = {
         id: p.rootGoalId,
         parentId: null,
@@ -228,6 +232,7 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         instructions: p.instructions,
         repoPath: p.repoPath ?? null,
         terminal: p.terminal ?? false,
+        archived: false,
         providerSessionId: null,
         process: "unknown",
         processDetail: null,
@@ -244,6 +249,20 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
       if (group && p.role === "monitor") group.monitorAgentId = p.agentId;
       break;
     }
+    case "agent.archived": {
+      const agent = touchAgent(state, e.payload.agentId, e.ts);
+      if (!agent) break;
+      agent.archived = true;
+      // Its group can take a new leader or monitor.
+      const group = agentGroup(state, agent);
+      if (group?.leaderAgentId === agent.id) group.leaderAgentId = null;
+      if (group?.monitorAgentId === agent.id) group.monitorAgentId = null;
+      break;
+    }
+    case "agent.restart_requested":
+      // Acted on by the agent's runner.
+      touchAgent(state, e.payload.agentId, e.ts);
+      break;
     case "agent.session_bound": {
       const agent = touchAgent(state, e.payload.agentId, e.ts);
       if (agent) agent.providerSessionId = e.payload.providerSessionId;
@@ -405,6 +424,12 @@ export function agentGroup(state: RoomState, agent: Agent): Group | undefined {
 // is that leader, the leaders of groups on the nearest ancestor goal that has any. A
 // standalone author's post goes to the leaders on the nearest goal, starting with its own.
 // An empty result means only humans can review it.
+// A standalone agent in a personal workspace is plain Claude Code or Codex: no Banyan
+// coordination instructions, no Room MCP and no kickoff of its own.
+export function isPlainAgent(state: RoomState, agent: Agent): boolean {
+  return agent.provider === "shell" || (state.room?.personal === true && agent.groupId === null);
+}
+
 export function postReviewers(state: RoomState, post: Post): string[] {
   const group = post.groupId === null ? undefined : state.groups[post.groupId];
   if (post.groupId !== null && !group) return [];

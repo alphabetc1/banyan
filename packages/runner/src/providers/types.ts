@@ -8,9 +8,10 @@ export interface SessionSpec {
   agentId: string;
   cwd: string;
   model: string;
-  systemPrompt: string;
-  // Room MCP endpoint whose URL path binds this agent's identity.
-  roomMcpUrl: string;
+  // Banyan's coordination instructions; null for a plain agent.
+  systemPrompt: string | null;
+  // Room MCP endpoint whose URL path binds this agent's identity; null for a plain agent.
+  roomMcpUrl: string | null;
   resumeSessionId: string | null;
 }
 
@@ -21,6 +22,9 @@ export interface SessionCallbacks {
   // Resolves when a human decides in the web UI; may stay pending for a long time.
   requestApproval(req: { tool: string; input: string }): Promise<"allowed" | "denied">;
   onTurnEnd(info: { ok: boolean; error: string | null }): void;
+  // A session that can refuse input (see AgentSession.acceptsInput) calls this when it can
+  // take input again.
+  onAcceptsInput?(): void;
   onExit(info: { crashed: boolean; detail: string }): void;
 }
 
@@ -40,6 +44,10 @@ export interface AgentSession {
   // recorded: Banyan has already put this text in the transcript (a room message), so a
   // provider that reports input itself must not report it again.
   send(text: string, delivery: Delivery, recorded?: boolean): void;
+  // False while input with this delivery would land somewhere it must not, such as a question
+  // the CLI is asking in its terminal, or, for fyi, a turn still in progress; messages then
+  // wait. Absent means input is always accepted.
+  acceptsInput?(delivery: Delivery): boolean;
   stop(): Promise<void>;
   // Present for sessions that run in a terminal.
   readonly terminal?: TerminalHandle;

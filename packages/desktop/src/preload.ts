@@ -14,7 +14,7 @@ const bridge: DesktopBridge = {
   },
   setServerUrl: (url) => ipcRenderer.invoke("settings:server-url", url),
   localWorkspace: () => ipcRenderer.invoke("local:workspace"),
-  pickRepository: () => ipcRenderer.invoke("repo:pick"),
+  pickRepository: (startIn) => ipcRenderer.invoke("repo:pick", startIn),
   openLocalWorkspace: () => ipcRenderer.send("open:local"),
   openTeamServer: () => ipcRenderer.send("open:team"),
   notify: (title, body, path) => ipcRenderer.send("notify", title, body, path),
