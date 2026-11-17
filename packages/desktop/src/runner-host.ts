@@ -3,7 +3,7 @@
 import { acquireRunnerLock, readSavedRunner, roomDir } from "@banyan/runner/registration";
 import { consoleLogger } from "@banyan/runner/logger";
 import { Runner } from "@banyan/runner/runner";
-import type { HostMessage, MainMessage, TerminalPortMessage } from "./host-protocol.ts";
+import type { HostMessage, MainMessage, TerminalArgs, TerminalPortMessage } from "./host-protocol.ts";
 
 const MONITOR_INTERVAL_MS = 10 * 60_000;
 
@@ -17,7 +17,8 @@ async function main(): Promise<void> {
   if (!saved) throw new Error(`no runner registered for room ${roomId}`);
   const dir = roomDir(roomId);
   const releaseLock = acquireRunnerLock(dir);
-  const runner = new Runner({ ...saved, roomDir: dir, monitorIntervalMs: MONITOR_INTERVAL_MS }, consoleLogger);
+  const terminalArgs = process.env.BANYAN_TERMINAL_ARGS ? (JSON.parse(process.env.BANYAN_TERMINAL_ARGS) as TerminalArgs) : undefined;
+  const runner = new Runner({ ...saved, roomDir: dir, monitorIntervalMs: MONITOR_INTERVAL_MS, ...(terminalArgs ? { terminalArgs } : {}) }, consoleLogger);
   const stop = async (code: number) => {
     await runner.stop();
     releaseLock();
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   port.on("message", (e: { data: MainMessage; ports: Electron.MessagePortMain[] }) => {
     if (e.data.type === "stop") void stop(0);
     else if (e.data.type === "terminal" && e.ports[0]) connectTerminal(runner, e.data.agentId, e.ports[0]);
+    else if (e.data.type === "terminal-args") runner.setTerminalArgs(e.data.args);
   });
   try {
     await runner.start();

@@ -25,6 +25,13 @@ export interface RunnerConfig {
   roomDir: string;
   claudePermissionMode?: PermissionMode;
   monitorIntervalMs?: number;
+  // Extra command-line arguments for terminal sessions, per CLI.
+  terminalArgs?: TerminalArgs;
+}
+
+export interface TerminalArgs {
+  claude: string[];
+  codex: string[];
 }
 
 export class Runner {
@@ -59,6 +66,7 @@ export class Runner {
     const processes = new AgentProcesses(config.roomDir);
     this.providers = { claude: new ClaudeProvider(processes, config.claudePermissionMode), codex: new CodexProvider(log, processes) };
     this.terminals = { claude: TerminalProvider.claude(processes, config.claudePermissionMode), codex: TerminalProvider.codex(processes), shell: TerminalProvider.shell(processes) };
+    if (config.terminalArgs) this.setTerminalArgs(config.terminalArgs);
     supervisor = new Supervisor({
       runnerId: config.runnerId,
       roomDir: config.roomDir,
@@ -84,6 +92,12 @@ export class Runner {
     await this.terminals.shell.open();
     await this.link.start();
     await this.supervisor.start();
+  }
+
+  // Applies to terminal sessions started from now on; running ones keep theirs.
+  setTerminalArgs(args: TerminalArgs): void {
+    this.terminals.claude.setExtraArgs(args.claude);
+    this.terminals.codex.setExtraArgs(args.codex);
   }
 
   // The live terminal of a terminal-mode agent this runner hosts.

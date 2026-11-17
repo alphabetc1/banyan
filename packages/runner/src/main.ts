@@ -1,8 +1,10 @@
 // Runner CLI.
 //   banyan-runner register --server <url> --room <roomId> --member-token <token> [--hostname <name>]
 //   banyan-runner start --room <roomId>
+// BANYAN_CLAUDE_ARGS and BANYAN_CODEX_ARGS add command-line arguments to terminal sessions.
 import { hostname } from "node:os";
 import { parseArgs } from "node:util";
+import { terminalArgsFromEnv } from "./args.ts";
 import { consoleLogger } from "./logger.ts";
 import { acquireRunnerLock, readSavedRunner, registerRunner, roomDir } from "./registration.ts";
 import { Runner } from "./runner.ts";
@@ -26,7 +28,8 @@ async function start(args: string[]): Promise<void> {
   if (!saved) throw new Error(`no runner registered for room ${values.room}; run register first`);
   const dir = roomDir(values.room);
   const releaseLock = acquireRunnerLock(dir);
-  const runner = new Runner({ ...saved, roomDir: dir, monitorIntervalMs: MONITOR_INTERVAL_MS }, consoleLogger);
+  const terminalArgs = terminalArgsFromEnv(process.env);
+  const runner = new Runner({ ...saved, roomDir: dir, monitorIntervalMs: MONITOR_INTERVAL_MS, ...(terminalArgs ? { terminalArgs } : {}) }, consoleLogger);
   try {
     await runner.start();
   } catch (e) {

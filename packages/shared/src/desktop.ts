@@ -13,6 +13,11 @@ export interface LocalRunnerStatus {
   error?: string;
 }
 
+export interface TerminalArgsLines {
+  claude: string;
+  codex: string;
+}
+
 // A page's connection to the terminal of an agent running on this machine.
 export interface TerminalConnection {
   write(data: string): void;
@@ -35,6 +40,15 @@ export interface DesktopBridge {
   // folder is not inside a git repository.
   pickRepository(startIn: string | null): Promise<string | null>;
   openLocalWorkspace(): void;
+  // Extra arguments for Claude Code and Codex terminals on this machine, as typed (one line
+  // each), with the defaults. Saving applies to terminals started afterwards.
+  terminalArgs(): Promise<{ current: TerminalArgsLines; defaults: TerminalArgsLines }>;
+  setTerminalArgs(args: TerminalArgsLines): Promise<void>;
+  // Saves an image the person pasted as a file on this machine and resolves to its path, which
+  // Claude Code and Codex take as an image attachment when pasted into their terminal.
+  saveImage(data: ArrayBuffer, type: string): Promise<string>;
+  // The path on this machine of a file dropped onto the page.
+  pathForFile(file: File): string;
   // Connects to the terminal of a terminal-mode agent hosted by this machine's runner for the
   // room. onData first receives recent output, then every new chunk; onClose fires when the
   // terminal is not available or goes away.

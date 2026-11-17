@@ -1,7 +1,7 @@
 // Exposes window.banyanDesktop to the room server's pages and the setup page.
 import type { DesktopBridge, LocalRunnerStatus } from "@banyan/shared";
 import type { TerminalPortMessage } from "./host-protocol.ts";
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 
 const bridge: DesktopBridge = {
   listRunners: () => ipcRenderer.invoke("runners:list"),
@@ -16,6 +16,10 @@ const bridge: DesktopBridge = {
   localWorkspace: () => ipcRenderer.invoke("local:workspace"),
   pickRepository: (startIn) => ipcRenderer.invoke("repo:pick", startIn),
   openLocalWorkspace: () => ipcRenderer.send("open:local"),
+  saveImage: (data, type) => ipcRenderer.invoke("image:save", data, type),
+  pathForFile: (file) => webUtils.getPathForFile(file),
+  terminalArgs: () => ipcRenderer.invoke("terminal-args:get"),
+  setTerminalArgs: (args) => ipcRenderer.invoke("terminal-args:set", args),
   openTeamServer: () => ipcRenderer.send("open:team"),
   notify: (title, body, path) => ipcRenderer.send("notify", title, body, path),
   openTerminal: (roomId, agentId, onData, onClose) => {

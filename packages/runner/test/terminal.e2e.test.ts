@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { newId, type RoomState } from "@banyan/shared";
 import { MemoryLogger } from "../src/logger.ts";
 import { Runner } from "../src/runner.ts";
-import { appendAsMember, createFork, createRoom, draft, tempDir, TestServer, waitFor } from "./helpers.ts";
+import { appendAsMember, createFork, createRoom, draft, endProcessesUnder, tempDir, TestServer, waitFor } from "./helpers.ts";
 
 const STEP_TIMEOUT_MS = 4 * 60_000;
 
@@ -117,6 +117,7 @@ describe("Claude Code in a terminal", () => {
     // person's ~/.codex; only the login is copied in.
     const codexHome = mkdtempSync(join(tmpdir(), "banyan-codex-home-"));
     cleanups.push(() => rmSync(codexHome, { recursive: true, force: true }));
+    cleanups.push(() => endProcessesUnder(codexHome));
     copyFileSync(join(homedir(), ".codex", "auth.json"), join(codexHome, "auth.json"));
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;

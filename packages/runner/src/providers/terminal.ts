@@ -48,6 +48,8 @@ interface HookInput {
 interface Launch {
   spec: SessionSpec;
   hookUrl: string;
+  // The person's own extra arguments for this CLI, such as permission flags.
+  extraArgs: string[];
   // The session id Banyan chose, for a CLI that takes one.
   sessionId: string | null;
   initialPrompt: string | null;
@@ -71,7 +73,7 @@ function claudeProfile(permissionMode: PermissionMode | undefined): CliProfile {
   return {
     command: "claude",
     choosesSessionId: true,
-    args: ({ spec, hookUrl, sessionId, initialPrompt }) => {
+    args: ({ spec, hookUrl, sessionId, initialPrompt, extraArgs }) => {
       const hooks = Object.fromEntries(events.map((e) => [e, [{ hooks: [{ type: "http", url: hookUrl }] }]]));
       // Room tools are Banyan's own coordination channel and never need a person, as in
       // managed sessions; everything else follows the person's own permission settings.
@@ -83,6 +85,7 @@ function claudeProfile(permissionMode: PermissionMode | undefined): CliProfile {
         ...(spec.systemPrompt ? ["--append-system-prompt", spec.systemPrompt] : []),
         ...(spec.model === DEFAULT_MODEL ? [] : ["--model", spec.model]),
         ...(permissionMode ? ["--permission-mode", permissionMode] : []),
+        ...extraArgs,
         ...(spec.resumeSessionId ? ["--resume", spec.resumeSessionId] : ["--session-id", sessionId!]),
         ...(initialPrompt ? [initialPrompt] : []),
       ];
@@ -105,7 +108,7 @@ function codexProfile(): CliProfile {
   return {
     command: "codex",
     choosesSessionId: false,
-    args: ({ spec, initialPrompt }) => {
+    args: ({ spec, initialPrompt, extraArgs }) => {
       const config = [
         ...events.map((e) => `hooks.${e}=[{hooks=[{type="command",command=${toml(CODEX_HOOK_COMMAND)}}]}]`),
         // Room tools never need a person, as in managed sessions.
@@ -116,6 +119,7 @@ function codexProfile(): CliProfile {
         ...(spec.resumeSessionId ? ["resume"] : []),
         ...config.flatMap((c) => ["-c", c]),
         ...(spec.model === DEFAULT_MODEL ? [] : ["-m", spec.model]),
+        ...extraArgs,
         ...(spec.resumeSessionId ? [spec.resumeSessionId] : []),
         ...(initialPrompt ? [initialPrompt] : []),
       ];
@@ -166,6 +170,7 @@ class TerminalSession implements AgentSession, TerminalHandle {
     private hookUrl: string,
     private profile: CliProfile,
     private processes: AgentProcesses,
+    private extraArgs: string[],
   ) {
     this.sessionId = spec.resumeSessionId ?? (profile.choosesSessionId ? randomUUID() : null);
     this.ready = new Promise((resolve, reject) => {
@@ -183,7 +188,7 @@ class TerminalSession implements AgentSession, TerminalHandle {
   }
 
   private spawn(): void {
-    const launch: Launch = { spec: this.spec, hookUrl: this.hookUrl, sessionId: this.sessionId, initialPrompt: this.initialPrompt };
+    const launch: Launch = { spec: this.spec, hookUrl: this.hookUrl, extraArgs: this.extraArgs, sessionId: this.sessionId, initialPrompt: this.initialPrompt };
     const { command } = this.profile;
     let pty: IPty;
     try {
@@ -222,7 +227,9 @@ class TerminalSession implements AgentSession, TerminalHandle {
       for (const l of this.endListeners) l(detail);
       this.endListeners.clear();
       this.listeners.clear();
-      this.cb.onExit({ crashed: !this.stopped && exitCode !== 0, detail: this.stopped ? "stopped" : detail });
+      // Exiting while asking its person (say, "No, exit" at the folder trust question) is
+      // their answer, not a crash to restart from.
+      this.cb.onExit({ crashed: !this.stopped && exitCode !== 0 && !this.awaitingPerson, detail: this.stopped ? "stopped" : detail });
     });
   }
 
@@ -378,6 +385,8 @@ export class TerminalProvider implements AgentProvider {
   private base = "";
   // Hook URLs carry the agent id and a secret, so a hook reaches only its own session.
   private sessions = new Map<string, { secret: string; session: TerminalSession }>();
+  // The person's extra arguments, used by sessions started from now on.
+  private extraArgs: string[] = [];
 
   private constructor(
     private profile: CliProfile,
@@ -395,6 +404,10 @@ export class TerminalProvider implements AgentProvider {
 
   static shell(processes: AgentProcesses): TerminalProvider {
     return new TerminalProvider(shellProfile(), processes);
+  }
+
+  setExtraArgs(args: string[]): void {
+    this.extraArgs = [...args];
   }
 
   async open(): Promise<void> {
@@ -437,6 +450,7 @@ export class TerminalProvider implements AgentProvider {
       `${this.base}/hook/${spec.agentId}/${secret}`,
       this.profile,
       this.processes,
+      this.extraArgs,
     );
     this.sessions.set(spec.agentId, { secret, session });
     return session;

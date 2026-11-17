@@ -2,6 +2,7 @@
 // workspace, which one was open last, and which rooms run a runner on this machine.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { TerminalArgsLines } from "@banyan/shared";
 import type { LocalWorkspace } from "./local-workspace.ts";
 
 export interface Settings {
@@ -11,9 +12,14 @@ export interface Settings {
   enabledRooms: string[];
   // The repository picked last, where the picker opens next.
   lastRepoDir: string | null;
+  // Extra arguments for terminal sessions, one line per CLI as the person typed them.
+  terminalArgs: TerminalArgsLines;
 }
 
-const DEFAULTS: Settings = { serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null };
+// Agents run without permission prompts by default; the person can change it.
+export const DEFAULT_TERMINAL_ARGS: TerminalArgsLines = { claude: "--dangerously-skip-permissions", codex: "--yolo --sandbox danger-full-access" };
+
+const DEFAULTS: Settings = { serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS };
 
 export class SettingsFile {
   private value: Settings;

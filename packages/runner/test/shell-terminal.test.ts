@@ -1,11 +1,12 @@
 // A plain terminal agent: the person's own shell in the agent's worktree, run by a real runner.
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { newId } from "@banyan/shared";
 import { MemoryLogger } from "../src/logger.ts";
 import { Runner } from "../src/runner.ts";
-import { appendAsMember, createFork, createRoom, draft, tempDir, TestServer, waitFor } from "./helpers.ts";
+import { appendAsMember, createFork, createRoom, draft, endProcessesUnder, tempDir, TestServer, waitFor } from "./helpers.ts";
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -92,5 +93,61 @@ describe("shell terminal", () => {
     expect(runner.terminal(agentId)).toBeNull();
     expect(existsSync(join(roomDir, "worktrees", agentId))).toBe(true);
     expect(log.lines.filter((l) => l.level === "error")).toEqual([]);
+  });
+
+  it("starts Claude Code and Codex with the person's extra arguments, and new ones apply to the next start", { timeout: 60_000 }, async () => {
+    // Codex gets a throwaway home, so nothing is written to the person's ~/.codex.
+    const codexHome = tempDir("codex-home");
+    cleanups.push(() => endProcessesUnder(codexHome));
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    cleanups.push(() => {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    });
+    const server = new TestServer();
+    await server.start();
+    cleanups.push(() => server.stop());
+    const room = await createRoom(server, createFork(), true);
+    const roomDir = tempDir("args-room");
+    const terminalArgs = { claude: ["--dangerously-skip-permissions"], codex: ["--yolo", "--sandbox", "danger-full-access"] };
+    const runner = new Runner({ serverUrl: server.base, roomId: room.roomId, runnerId: room.runnerId, runnerToken: room.runnerToken, roomDir, terminalArgs }, new MemoryLogger());
+    await runner.start();
+    cleanups.push(() => runner.stop());
+    const ids = { claude: newId(), codex: newId() };
+    // Plain agents with no first message: neither CLI sends anything to a model.
+    await appendAsMember(server, room.roomId, room.memberToken, (["claude", "codex"] as const).map((provider) =>
+      draft("agent.created", { agentId: ids[provider], groupId: null, runnerId: room.runnerId, name: provider, role: "worker", provider, model: "default", goalId: room.rootGoalId, instructions: "", terminal: true }),
+    ));
+    const state = () => server.state(room.roomId, room.memberToken);
+    await waitFor(async () => {
+      const s = await state();
+      return s.agents[ids.claude]?.process === "running" && s.agents[ids.codex]?.process === "running";
+    }, "both terminals running", 30_000);
+    // The arguments as the operating system shows them for each recorded terminal process.
+    const commandLines = () =>
+      readFileSync(join(roomDir, "agent-processes"), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => execFileSync("ps", ["-o", "args=", "-p", String((JSON.parse(l) as { pid: number }).pid)], { encoding: "utf8" }).trim());
+    const claudeLine = () => commandLines().find((c) => c.includes("claude --settings"))!;
+    const codexLine = () => commandLines().find((c) => c.includes("codex -c"))!;
+    expect(claudeLine()).toContain("--dangerously-skip-permissions --session-id");
+    expect(codexLine()).toContain("--yolo --sandbox danger-full-access");
+
+    // New arguments reach terminals started afterwards.
+    runner.setTerminalArgs({ claude: ["--permission-mode", "plan"], codex: [] });
+    await appendAsMember(server, room.roomId, room.memberToken, [draft("agent.archived", { agentId: ids.codex })]);
+    // Claude Code shows its folder trust question here; its default answer, "No, exit", ends it,
+    // and as the person's answer that is not a crash to restart from.
+    await waitFor(() => /entertoconfirm/i.test(plain(runner.terminal(ids.claude)!.attach(() => {}).backlog).replace(/\s/g, "")), "the trust question's menu");
+    await new Promise((r) => setTimeout(r, 500));
+    runner.terminal(ids.claude)!.write("\r");
+    await waitFor(async () => (await state()).agents[ids.claude]?.process === "exited", "claude exiting");
+    await new Promise((r) => setTimeout(r, 6000));
+    expect((await state()).agents[ids.claude]?.process).toBe("exited");
+    await appendAsMember(server, room.roomId, room.memberToken, [draft("agent.restart_requested", { agentId: ids.claude })]);
+    await waitFor(async () => (await state()).agents[ids.claude]?.process === "running" && claudeLine()?.includes("--permission-mode plan"), "claude restarted with the new arguments", 30_000);
+    expect(claudeLine()).not.toContain("--dangerously-skip-permissions");
   });
 });

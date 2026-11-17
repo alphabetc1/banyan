@@ -1,6 +1,7 @@
 {
   "name": "@banyan/server",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "exports": {
     "./app": "./src/app.ts"

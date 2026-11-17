@@ -479,3 +479,21 @@ Rhett 的要求：
 - **删除与重新启动**（Rhett 反馈：独立 agent 删不掉，退出终端后就成了僵尸终端）：新增事件 `agent.archived` 和 `agent.restart_requested`，只有 agent 的主人或 room 的 owner 可以操作。删除后会话结束，不再启动，也不再出现在列表和收件箱里；它在 group 里的 leader/monitor 位置会腾出来；**worktree 和分支保留**，删除 agent 不会删掉代码。CLI 正常退出（`/exit`、shell 里的 `exit`）不算崩溃，不会自动重启；终端关闭的提示上有「重新启动」，agent 页顶部有「重新启动 / 删除」，删除前会确认。
 - 本地工作区（personal room）的导航只保留「总览」和「Worktree」；目标、结论、协调这些协作页面只在团队 room 里显示。
 
+## 26. 终端启动参数（2026-11-17）
+
+Rhett 的要求：Claude Code 和 Codex 的启动参数可以自定义，默认带上跳过权限确认的参数；这是可选功能，不放在显眼的位置。
+
+- 默认值：Claude Code 用 `--dangerously-skip-permissions`，Codex 用 `--yolo --sandbox danger-full-access`（`--yolo` 是 Codex 的隐藏别名，已实测确认它在交互模式和 `resume` 里都能用）。只影响终端模式，托管模式和纯终端（shell）不受影响。
+- 位置：顶栏语言/主题旁边的小 ⚙，只在桌面客户端里显示。每种 CLI 一行，按 shell 的规则拆分（引号和反斜杠转义都支持），解析失败时不保存。保存后通过 runner 宿主进程的消息生效，只影响之后启动的终端，正在运行的不受影响，也不用重启 runner。命令行 runner 用 `BANYAN_CLAUDE_ARGS` / `BANYAN_CODEX_ARGS` 环境变量设置。
+- 实测发现：带 `--dangerously-skip-permissions` 时，即使 `~` 已经被信任，Claude Code 仍会对每个新文件夹询问一次「是否信任」，默认选项是「No, exit」。Banyan 会识别这个问题并显示小手掌，不替用户回答。选「No, exit」会让 Claude 以非零退出码结束，这被当作用户的回答处理，不算崩溃，所以不会被自动重启（修复前会连续重启 3 次，反复问同一个问题）。
+- 风险：在这些默认参数下，agent 执行命令前不会询问。在团队 room 里，别人或 leader 发给你的 agent 的消息会被直接输入它的终端，它会带着完全的权限去执行。
+
+## 27. 往终端里粘贴图片（2026-11-17）
+
+Rhett 反馈：Banyan 里的 Claude Code / Codex 不能输入图片。原因是终端只能传文字，xterm.js 收到粘贴事件时会丢掉图片；在普通终端里也一样（Claude Code 在那里要用 Ctrl+V 自己去读剪贴板）。
+
+- 在终端里用 ⌘V 粘贴图片时，Banyan 把图片存成文件（客户端数据目录下的 `pasted-images/`，超过 7 天的在启动时清理；只接受 png/jpeg/gif/webp，单张不超过 20MB），然后把文件路径粘贴进终端。往终端里拖入文件也一样，粘贴的是文件路径。路径里的空格等字符按终端处理拖入文件的方式加反斜杠转义。
+- 实测（Claude Code 2.1.322、Codex 0.167.1）：两种 CLI 都会把粘贴进来的图片路径（包括转义过的、带空格的路径）识别成 `[Image #1]`。
+- Ctrl+V 照常交给 CLI 自己处理，文字粘贴也不受影响。
+- 测试时发现：交互式 Codex 会在它的 home 目录下留一个后台 daemon 进程，TUI 退出后也不会结束。所以用临时 `CODEX_HOME` 的测试，结束时会把在那个目录下启动的进程一起清理掉。
+

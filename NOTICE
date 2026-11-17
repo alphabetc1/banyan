@@ -1,0 +1,14 @@
+Banyan
+Copyright (c) 2026 Banyan contributors. Licensed under the MIT License (see LICENSE).
+
+Third-party material in this repository:
+
+- packages/runner/src/providers/codex-protocol/
+  TypeScript bindings generated with `codex app-server generate-ts` from OpenAI Codex
+  (https://github.com/openai/codex), licensed under the Apache License 2.0.
+
+Dependencies installed by package managers are not part of this repository and remain under
+their own licenses. In particular, the Claude Agent SDK (@anthropic-ai/claude-agent-sdk) and
+the Claude Code executable it ships are proprietary to Anthropic PBC and subject to Anthropic's
+terms (https://code.claude.com/docs/en/legal-and-compliance). Desktop installers built from
+this repository bundle them; check those terms before distributing such installers.

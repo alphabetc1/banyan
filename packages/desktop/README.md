@@ -32,8 +32,10 @@ curl -fsSL <server>/install.sh | bash -s <server>
 2. 点「新建 agent」，填写或点「选择…」选一个本机的 git 仓库，起个名字。Claude agent 默认勾选「在 Claude Code 自己的终端里运行」。每个 agent 会在这个仓库上开一个独立的 worktree 和分支（`banyan/…`），从仓库当前检出的提交开始；分支不会自动 push，push 由你自己决定。
 3. 在左边选中 agent，右边就是它的 Claude Code 终端，可以直接打字、用斜杠命令、在终端里处理审批。它在等你（审批、信任文件夹之类的问题）时，左边会标出「在终端里等你处理」，并弹系统通知。
 4. 需要团队协作时，在顶栏的 room 下拉菜单里选「团队 room server…」，连接团队的 server（地址见 `deploy/macos/README.md`）。之后同一个下拉菜单可以在「本地工作区」和团队 room 之间切换。在团队 room 里点「在本机运行 agent」，就能用这台机器承担你的 agent。
-5. 关窗口只是隐藏到托盘，agent 继续运行；从托盘选「退出」会优雅停止本机 agent。下次启动时会自动拉起，终端 agent 用 `claude --resume` 接着原来的会话，之前的历史全部可见。
-6. 如果 runner 崩溃，它不会自动重启。顶栏会显示「本机 runner 出错已停止」，以及原因和日志路径，它的 agent 进程（包括正在运行的工具命令）也会被一并结束。点「重新启动」或者重开客户端，agent 会接着原来的会话继续。
+5. 图片：在终端里用 ⌘V 粘贴截图，或者把图片拖进终端，Claude Code 和 Codex 会把它当成图片附件（显示为 `[Image #1]`）。
+6. 终端启动参数：顶栏的小 ⚙ 可以设置 Claude Code 和 Codex 的额外命令行参数。默认是 `--dangerously-skip-permissions` 和 `--yolo --sandbox danger-full-access`，也就是 agent 执行命令时不再询问。修改后只对之后启动的终端生效。
+7. 关窗口只是隐藏到托盘，agent 继续运行；从托盘选「退出」会优雅停止本机 agent。下次启动时会自动拉起，终端 agent 用 `claude --resume` 接着原来的会话，之前的历史全部可见。
+8. 如果 runner 崩溃，它不会自动重启。顶栏会显示「本机 runner 出错已停止」，以及原因和日志路径，它的 agent 进程（包括正在运行的工具命令）也会被一并结束。点「重新启动」或者重开客户端，agent 会接着原来的会话继续。
 
 本地工作区的数据在客户端的数据目录里（macOS：`~/Library/Application Support/Banyan/local.sqlite`），内置 server 只监听 `127.0.0.1:7710`（可以用 `BANYAN_LOCAL_PORT` 修改）。
 

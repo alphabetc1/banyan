@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { normalizeServerUrl, SettingsFile } from "../src/settings.ts";
+import { DEFAULT_TERMINAL_ARGS, normalizeServerUrl, SettingsFile } from "../src/settings.ts";
 
 const tempPath = () => join(mkdtempSync(join(tmpdir(), "banyan-desktop-")), "nested", "settings.json");
 
@@ -10,10 +10,10 @@ describe("settings", () => {
   it("starts empty and persists updates across instances", () => {
     const path = tempPath();
     const first = new SettingsFile(path);
-    expect(first.get()).toEqual({ serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null });
+    expect(first.get()).toEqual({ serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS });
     first.update({ serverUrl: "http://host:7700", lastOpened: "team" });
     first.update({ enabledRooms: ["r1"] });
-    const expected = { serverUrl: "http://host:7700", localWorkspace: null, lastOpened: "team", enabledRooms: ["r1"], lastRepoDir: null };
+    const expected = { serverUrl: "http://host:7700", localWorkspace: null, lastOpened: "team", enabledRooms: ["r1"], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS };
     expect(new SettingsFile(path).get()).toEqual(expected);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(expected);
     expect(existsSync(`${path}.tmp`)).toBe(false);

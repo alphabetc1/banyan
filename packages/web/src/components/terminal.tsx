@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { openTerminal } from "../desktop.tsx";
+import { openTerminal, pathsForTerminal } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 
 // sessionKey changes when the agent's session restarts, so the view reconnects to the new one.
@@ -40,8 +40,38 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
     connection.resize(term.cols, term.rows);
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(el);
+    // A terminal carries only text, so an image pasted or files dropped go in as file paths,
+    // which Claude Code and Codex attach as images. Text pastes are left to xterm.
+    const pasteFiles = (files: File[], fromClipboard: boolean) =>
+      void pathsForTerminal(files, fromClipboard).then(
+        (paths) => paths.length > 0 && term.paste(paths.join(" ")),
+        (e: Error) => setClosed(e.message),
+      );
+    const onPaste = (e: ClipboardEvent) => {
+      const images = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (images.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pasteFiles(images, true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      const files = [...(e.dataTransfer?.files ?? [])];
+      if (files.length === 0) return;
+      e.preventDefault();
+      pasteFiles(files, false);
+      term.focus();
+    };
+    el.addEventListener("paste", onPaste, true);
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
     term.focus();
     return () => {
+      el.removeEventListener("paste", onPaste, true);
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
       observer.disconnect();
       input.dispose();
       resized.dispose();

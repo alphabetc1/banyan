@@ -3,7 +3,7 @@
 // Code and Codex agents (costs a little real API usage).
 // Run with `pnpm --filter @banyan/desktop test:e2e`.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -70,7 +70,7 @@ async function launch(env: NodeJS.ProcessEnv = {}): Promise<{ app: ElectronAppli
   return { app, page };
 }
 
-const settingsFile = () => JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8")) as { serverUrl: string | null; enabledRooms: string[]; localWorkspace: { roomId: string } };
+const settingsFile = () => JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8")) as { serverUrl: string | null; enabledRooms: string[]; localWorkspace: { roomId: string }; terminalArgs: { claude: string; codex: string } };
 
 // The app opens on its local workspace; team rooms are reached through the room switcher.
 async function connectAndCreateRoom(page: Page, fork = createFork()): Promise<string> {
@@ -360,7 +360,12 @@ Then reply DONE.`;
   await page.goto(`${server.base}/rooms/${roomId}/agents/${agents.claude}`);
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
   for (const provider of ["claude", "codex"] as const) {
-    await waitFor(async () => (await phase(provider)) === "after-crash", `${provider} reaching after-crash`, 5 * 60_000, 1000);
+    await waitFor(async () => (await phase(provider)) === "after-crash", `${provider} reaching after-crash`, 5 * 60_000, 1000).catch(async (e: Error) => {
+      // What the agent was doing, so a timeout explains itself.
+      const a = (await server.state(roomId, token)).agents[agents[provider]]!;
+      const recent = (await transcriptTexts(roomId, agents[provider], token)).slice(0, 8);
+      throw new Error(`${e.message}: ${JSON.stringify({ process: a.process, detail: a.processDetail, activity: a.activity, phase: a.phase?.value, recent })}`);
+    });
     const agent = (await server.state(roomId, token)).agents[agents[provider]]!;
     expect(agent.providerSessionId).toBe(sessions[provider]);
     const after = await transcriptTexts(roomId, agents[provider], token);
@@ -430,6 +435,20 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   const roomId = settingsFile().localWorkspace.roomId;
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
 
+  // Launch arguments sit behind the small settings button: by default they skip permission
+  // prompts; a changed line applies to terminals started afterwards.
+  await page.getByRole("button", { name: "Terminal launch arguments" }).click();
+  const claudeArgs = page.getByRole("dialog").getByLabel("Claude Code");
+  await expect(claudeArgs).toHaveValue("--dangerously-skip-permissions");
+  await expect(page.getByRole("dialog").getByLabel("Codex")).toHaveValue("--yolo --sandbox danger-full-access");
+  await claudeArgs.fill("--dangerously-skip-permissions --name 'e2e session");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toContainText("unclosed ' in");
+  await claudeArgs.fill("--dangerously-skip-permissions --name 'banyan e2e'");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(settingsFile().terminalArgs).toEqual({ claude: "--dangerously-skip-permissions --name 'banyan e2e'", codex: "--yolo --sandbox danger-full-access" });
+
   await page.getByRole("button", { name: "New agent" }).click();
   // By default: Claude Code in its own terminal, nothing to fill but a name and a repository.
   await expect(page.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
@@ -465,6 +484,10 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   await expect(icon).toHaveAttribute("data-icon", "done", { timeout: 60_000 });
   const agentId = (await agentState())!.id;
   const transcript = () => localTranscript(localBase, roomId, agentId, token);
+  // Claude Code runs with the saved arguments, as the operating system shows them.
+  const processLines = readFileSync(join(banyanHome, "rooms", roomId, "agent-processes"), "utf8").split("\n").filter(Boolean);
+  const commandLines = processLines.map((l) => execFileSync("ps", ["-o", "args=", "-p", String((JSON.parse(l) as { pid: number }).pid)], { encoding: "utf8" }));
+  expect(commandLines.some((c) => c.includes("--dangerously-skip-permissions --name banyan e2e --session-id"))).toBe(true);
   expect((await transcript()).filter((e) => e.kind === "user")).toEqual([]);
 
   // Typing into the terminal talks to Claude Code directly; the list follows its turn.
@@ -476,6 +499,20 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   await expect(icon).toHaveAttribute("data-icon", "done");
   // A plain session: Claude Code got just what the person typed, without Banyan's coordination.
   expect((await transcript()).filter((e) => e.kind === "user").map((e) => e.text)).toEqual(["Reply with exactly the word TYPED-OK and nothing else."]);
+
+  // An image pasted with the usual shortcut goes in as a saved file, which Claude Code attaches.
+  await terminal.click();
+  await page.evaluate(() => {
+    // An 8x8 PNG, as a screenshot would arrive on the clipboard.
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC"), (c) => c.charCodeAt(0));
+    const data = new DataTransfer();
+    data.items.add(new File([png], "screenshot.png", { type: "image/png" }));
+    document.querySelector("[data-testid=terminal] textarea")!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect(terminal).toContainText(/\[Image ?#1\]/, { timeout: 15_000 });
+  const saved = readdirSync(join(clientData, "pasted-images"));
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatch(/\.png$/);
 
   // The next agent starts in the same repository, and a plain terminal runs the person's shell.
   await page.getByRole("button", { name: "New agent" }).click();

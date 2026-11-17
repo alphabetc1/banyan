@@ -1,12 +1,14 @@
 {
   "name": "@banyan/runner",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "exports": {
     "./registration": "./src/registration.ts",
     "./logger": "./src/logger.ts",
     "./runner": "./src/runner.ts",
-    "./agent-processes": "./src/agent-processes.ts"
+    "./agent-processes": "./src/agent-processes.ts",
+    "./args": "./src/args.ts"
   },
   "scripts": {
     "typecheck": "tsc -p .",

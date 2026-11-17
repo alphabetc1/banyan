@@ -10,8 +10,12 @@ import { readSavedRunner, registerRunner } from "@banyan/runner/registration";
 import type { LocalRunnerStatus } from "@banyan/shared";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { ensureLocalWorkspace, startLocalServer, type LocalServer } from "./local-workspace.ts";
+import { removeOldPastedImages, savePastedImage } from "./pasted-images.ts";
 import { RunnerManager } from "./runner-manager.ts";
-import { normalizeServerUrl, SettingsFile } from "./settings.ts";
+import { splitArgs } from "@banyan/runner/args";
+import type { TerminalArgsLines } from "@banyan/shared";
+import type { TerminalArgs } from "./host-protocol.ts";
+import { DEFAULT_TERMINAL_ARGS, normalizeServerUrl, SettingsFile } from "./settings.ts";
 import { loginShellPath } from "./shell-env.ts";
 
 const here = import.meta.dirname;
@@ -216,7 +220,14 @@ if (!app.requestSingleInstanceLock()) {
     // Set by the room server's install script, which knows the server it was downloaded from.
     const presetServer = app.commandLine.getSwitchValue("server-url");
     if (presetServer) settings.update({ serverUrl: normalizeServerUrl(presetServer), lastOpened: "team" });
-    runners = new RunnerManager({ hostScript: join(here, "runner-host.mjs"), logDir: join(app.getPath("userData"), "logs"), env: runnerEnv(), onChange: broadcast });
+    runners = new RunnerManager({
+      hostScript: join(here, "runner-host.mjs"),
+      logDir: join(app.getPath("userData"), "logs"),
+      env: runnerEnv(),
+      terminalArgs: () => parseTerminalArgs(settings.get().terminalArgs),
+      onChange: broadcast,
+    });
+    removeOldPastedImages(pastedImagesDir());
     try {
       await openLocalWorkspace();
     } catch (e) {
@@ -234,6 +245,17 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle("settings:server-url", guard((url: string) => setServerUrl(url)));
     ipcMain.handle("local:workspace", (e) => (fromLocalWorkspace(e) ? settings.get().localWorkspace : null));
     ipcMain.handle("repo:pick", guard((startIn: string | null) => pickRepository(startIn)));
+    ipcMain.handle("image:save", guard((data: ArrayBuffer, type: string) => savePastedImage(pastedImagesDir(), data, type)));
+    ipcMain.handle("terminal-args:get", guard(() => ({ current: settings.get().terminalArgs, defaults: DEFAULT_TERMINAL_ARGS })));
+    ipcMain.handle(
+      "terminal-args:set",
+      guard((lines: TerminalArgsLines) => {
+        // Rejected before saving if a line does not parse.
+        const args = parseTerminalArgs(lines);
+        settings.update({ terminalArgs: { claude: lines.claude.trim(), codex: lines.codex.trim() } });
+        runners.updateTerminalArgs(args);
+      }),
+    );
     ipcMain.on("terminal:open", (e, req: { roomId: string; agentId: string }) => {
       const port = e.ports[0];
       if (!port) return;
@@ -291,3 +313,12 @@ async function openLocalWorkspace(): Promise<void> {
   settings.update({ localWorkspace: workspace });
   await enableRunner(localServer.url, workspace.roomId, workspace.memberToken);
 }
+
+function parseTerminalArgs(lines: TerminalArgsLines): TerminalArgs {
+  return { claude: splitArgs(lines.claude), codex: splitArgs(lines.codex) };
+}
+
+function pastedImagesDir(): string {
+  return join(app.getPath("userData"), "pasted-images");
+}
+

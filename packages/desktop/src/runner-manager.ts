@@ -6,7 +6,7 @@ import { killLeftoverAgentProcesses } from "@banyan/runner/agent-processes";
 import { readSavedRunner, roomDir } from "@banyan/runner/registration";
 import type { LocalRunnerState, LocalRunnerStatus } from "@banyan/shared";
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
-import type { HostMessage, MainMessage, TerminalPortMessage } from "./host-protocol.ts";
+import type { HostMessage, MainMessage, TerminalArgs, TerminalPortMessage } from "./host-protocol.ts";
 
 // Longer than the runner's own outbox drain so a graceful stop is not cut short.
 const STOP_TIMEOUT_MS = 15_000;
@@ -23,7 +23,7 @@ export class RunnerManager {
   private hosted = new Map<string, Hosted>();
 
   constructor(
-    private readonly opts: { hostScript: string; logDir: string; env: NodeJS.ProcessEnv; onChange(runners: LocalRunnerStatus[]): void },
+    private readonly opts: { hostScript: string; logDir: string; env: NodeJS.ProcessEnv; terminalArgs(): TerminalArgs; onChange(runners: LocalRunnerStatus[]): void },
   ) {
     mkdirSync(opts.logDir, { recursive: true });
   }
@@ -64,6 +64,11 @@ export class RunnerManager {
     this.changed();
   }
 
+  // Tells every running runner; terminals started afterwards use them.
+  updateTerminalArgs(args: TerminalArgs): void {
+    for (const h of this.hosted.values()) h.proc?.postMessage({ type: "terminal-args", args } satisfies MainMessage);
+  }
+
   // Hands a page's port to the runner hosting the room, which streams the agent's terminal.
   openTerminal(roomId: string, agentId: string, port: MessagePortMain): void {
     const proc = this.hosted.get(roomId)?.proc;
@@ -81,7 +86,8 @@ export class RunnerManager {
 
   private spawn(h: Hosted): void {
     const { roomId } = h.status;
-    const proc = utilityProcess.fork(this.opts.hostScript, [roomId], { env: this.opts.env, stdio: "pipe", serviceName: `Banyan runner ${roomId}` });
+    const env = { ...this.opts.env, BANYAN_TERMINAL_ARGS: JSON.stringify(this.opts.terminalArgs()) };
+    const proc = utilityProcess.fork(this.opts.hostScript, [roomId], { env, stdio: "pipe", serviceName: `Banyan runner ${roomId}` });
     h.proc = proc;
     proc.stdout?.pipe(h.log, { end: false });
     proc.stderr?.pipe(h.log, { end: false });

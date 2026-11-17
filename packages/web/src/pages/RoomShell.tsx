@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { InviteDialog } from "../components/dialogs.tsx";
 import { Preferences } from "../components/common.tsx";
+import { TerminalArgsButton } from "../components/terminal-args.tsx";
 import { RoomContext } from "../contexts.ts";
 import { inDesktopClient, LocalRunnerControl, openLocalWorkspace, openTeamServer, useAttentionNotifications } from "../desktop.tsx";
 import { useT, type MessageKey } from "../i18n.ts";
@@ -90,6 +91,7 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
           <LocalRunnerControl roomId={route.roomId} memberToken={memberToken} />
           <button onClick={() => setInviting(true)}>{t("top.invite")}</button>
           <Preferences />
+          <TerminalArgsButton />
         </header>
         {!store.connected && <div className="banner">{t("top.offline")}</div>}
       </div>

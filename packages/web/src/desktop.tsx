@@ -1,7 +1,7 @@
 // Features available only inside the Banyan desktop client, which exposes window.banyanDesktop:
 // running a runner for this room on the local machine, and system notifications.
 import { useEffect, useRef, useState } from "react";
-import type { DesktopBridge, LocalRunnerStatus, TerminalConnection } from "@banyan/shared";
+import type { DesktopBridge, LocalRunnerStatus, TerminalArgsLines, TerminalConnection } from "@banyan/shared";
 import { useNow } from "./components/common.tsx";
 import { attentionItems, attentionKey, ownAttention, type AttentionItem } from "./derive.ts";
 import { useReasonText, useT } from "./i18n.ts";
@@ -23,6 +23,29 @@ export async function adoptLocalWorkspace(): Promise<void> {
 export async function pickRepository(startIn: string): Promise<string | null> {
   if (!desktop) return null;
   return desktop.pickRepository(startIn || null).catch((e: Error) => Promise.reject(bridgeError(e)));
+}
+
+export async function terminalArgs(): Promise<{ current: TerminalArgsLines; defaults: TerminalArgsLines } | null> {
+  return desktop ? desktop.terminalArgs() : null;
+}
+
+export async function setTerminalArgs(args: TerminalArgsLines): Promise<void> {
+  await desktop?.setTerminalArgs(args).catch((e: Error) => Promise.reject(bridgeError(e)));
+}
+
+// Paths to paste into a terminal for files the person pastes or drops: images from the
+// clipboard are saved first; dropped files already have a path. Spaces are escaped as a
+// terminal does for a dropped file.
+export async function pathsForTerminal(files: File[], fromClipboard: boolean): Promise<string[]> {
+  if (!desktop) return [];
+  const bridge = desktop;
+  const paths = await Promise.all(
+    files.map(async (f) => {
+      if (!fromClipboard) return bridge.pathForFile(f);
+      return f.type.startsWith("image/") ? bridge.saveImage(await f.arrayBuffer(), f.type).catch((e: Error) => Promise.reject(bridgeError(e))) : "";
+    }),
+  );
+  return paths.filter(Boolean).map((p) => p.replace(/([\\ '"()&;])/g, "\\$1"));
 }
 
 export function openLocalWorkspace(): void {

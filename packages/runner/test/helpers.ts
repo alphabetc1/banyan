@@ -1,5 +1,5 @@
 // Shared fixtures: a real room server on a temp SQLite file and a real local git "fork".
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -116,4 +116,10 @@ export async function waitFor<T>(probe: () => T | Promise<T>, what: string, time
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, intervalMs));
   }
+}
+
+// Interactive Codex leaves a background daemon running from its home directory; a test that
+// gives Codex a throwaway home ends whatever it started there.
+export function endProcessesUnder(dir: string): void {
+  spawnSync("pkill", ["-f", dir]);
 }

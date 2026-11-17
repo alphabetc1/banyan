@@ -4,7 +4,14 @@
 export type HostMessage = { type: "running" } | { type: "failed"; error: string };
 
 // "terminal" comes with a MessagePort to the page that shows the agent's terminal.
-export type MainMessage = { type: "stop" } | { type: "terminal"; agentId: string };
+export type MainMessage = { type: "stop" } | { type: "terminal"; agentId: string } | { type: "terminal-args"; args: TerminalArgs };
+
+// Extra command-line arguments for terminal sessions, per CLI; also passed to a starting host
+// as JSON in BANYAN_TERMINAL_ARGS.
+export interface TerminalArgs {
+  claude: string[];
+  codex: string[];
+}
 
 // Over a terminal port: the page sends input, resize and close; the runner sends data and
 // closed.
