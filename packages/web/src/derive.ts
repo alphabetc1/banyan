@@ -42,6 +42,23 @@ export function activeAgents(state: RoomState): Agent[] {
   return Object.values(state.agents).filter((a) => !a.archived);
 }
 
+// The folder an agent works in, for display: its local folder with the home directory as ~,
+// or the room's fork by name.
+export function agentFolder(state: RoomState, agent: Agent): string {
+  if (agent.repoPath) return agent.repoPath.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+  const fork = state.room?.repoUrl?.replace(/\.git$/, "").split(/[/:]/).pop();
+  return fork ? `${fork} (fork)` : "";
+}
+
+// Agents in the order the person arranged them; ones not placed yet keep their order after.
+export function inSavedOrder(agents: Agent[], order: string[]): Agent[] {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return agents
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => (rank.get(x.a.id) ?? order.length + x.i) - (rank.get(y.a.id) ?? order.length + y.i))
+    .map(({ a }) => a);
+}
+
 export interface GoalNode {
   goal: Goal;
   children: GoalNode[];

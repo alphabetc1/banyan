@@ -131,20 +131,20 @@ async function enableRunner(serverUrl: string, roomId: string, memberToken: stri
   runners.start(roomId);
 }
 
-// The folder the person picks, as the top level of the git repository it belongs to. The
-// dialog opens where they picked last, or at startIn.
+// The folder the person picks: the top level of its git repository when it is in one, so each
+// agent gets a worktree; any other folder as it is. The dialog opens where they picked last,
+// or at startIn.
 async function pickRepository(startIn: string | null): Promise<string | null> {
   const defaultPath = startIn ? startIn.replace(/^~(?=$|\/)/, homedir()) : settings.get().lastRepoDir ?? undefined;
-  const picked = await dialog.showOpenDialog(showWindow(), { properties: ["openDirectory"], title: zh() ? "选择仓库" : "Choose a repository", ...(defaultPath ? { defaultPath } : {}) });
+  const picked = await dialog.showOpenDialog(showWindow(), { properties: ["openDirectory"], title: zh() ? "选择目录" : "Choose a folder", ...(defaultPath ? { defaultPath } : {}) });
   const folder = picked.filePaths[0];
   if (picked.canceled || !folder) return null;
-  try {
-    const { stdout } = await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: folder, env: runnerEnv() });
-    settings.update({ lastRepoDir: stdout.trim() });
-    return stdout.trim();
-  } catch {
-    throw new Error(`${zh() ? "不是 git 仓库" : "not a git repository"}: ${folder}`);
-  }
+  const chosen = await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: folder, env: runnerEnv() }).then(
+    ({ stdout }) => stdout.trim(),
+    () => folder,
+  );
+  settings.update({ lastRepoDir: chosen });
+  return chosen;
 }
 
 async function disableRunner(roomId: string): Promise<void> {

@@ -217,6 +217,31 @@ describe("Supervisor", () => {
     expect(t.log.lines.map((l) => l.level)).toEqual(["error"]);
   });
 
+  it("runs an agent in a folder that is not a git repository as it is, without a worktree", async () => {
+    const plainFolder = tempDir("plain-folder");
+    const emptyRepo = tempDir("empty-repo");
+    execFileSync("git", ["init", "-q", emptyRepo]);
+    const t = await setup({}, { createAgent: false, repoUrl: null, personal: true });
+    const [inFolder, inEmptyRepo, missing] = [newId(), newId(), newId()];
+    const base = { groupId: null, runnerId: t.room.runnerId, role: "worker" as const, provider: "claude" as const, model: "default", goalId: t.room.rootGoalId, instructions: "go", terminal: false };
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { ...base, agentId: inFolder, name: "folder", repoPath: plainFolder }),
+      draft("agent.created", { ...base, agentId: inEmptyRepo, name: "empty", repoPath: emptyRepo }),
+      draft("agent.created", { ...base, agentId: missing, name: "missing", repoPath: join(plainFolder, "nope") }),
+    ]);
+    await t.supervisor.start();
+    await waitFor(async () => {
+      const s = await t.serverState();
+      return s.agents[inFolder]?.process === "running" && s.agents[inEmptyRepo]?.process === "running" && s.agents[missing]?.process === "crashed";
+    }, "both running and the missing folder failing");
+    const cwd = (id: string) => t.provider.specs.find((spec) => spec.agentId === id)!.cwd;
+    expect(cwd(inFolder)).toBe(plainFolder);
+    expect(cwd(inEmptyRepo)).toBe(emptyRepo);
+    expect(t.store.worktree(inFolder)).toBeNull();
+    expect(Object.values((await t.serverState()).worktrees)).toEqual([]);
+    expect((await t.serverState()).agents[missing]!.processDetail).toBe(`failed to start: no such folder: ${join(plainFolder, "nope")}`);
+  });
+
   it("expands ~ in a local repository path", async () => {
     const home = mkdtempSync(join(homedir(), ".banyan-test-repo-"));
     cleanups.push(() => rmSync(home, { recursive: true, force: true }));

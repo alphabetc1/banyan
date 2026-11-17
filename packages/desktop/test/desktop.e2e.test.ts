@@ -3,7 +3,7 @@
 // Code and Codex agents (costs a little real API usage).
 // Run with `pnpm --filter @banyan/desktop test:e2e`.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -190,7 +190,7 @@ test("opens a local workspace on first launch and runs agents in a repository on
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
 
   await page.getByRole("button", { name: "New agent" }).click();
-  const repoField = page.getByLabel("Repository on the runner's machine");
+  const repoField = page.getByLabel(/^Folder on the runner's machine/);
   await expect(repoField).toHaveAttribute("required", "");
   await repoField.fill(repo);
   await page.getByLabel("Agent name").fill("local-worker");
@@ -452,7 +452,7 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   await page.getByRole("button", { name: "New agent" }).click();
   // By default: Claude Code in its own terminal, nothing to fill but a name and a repository.
   await expect(page.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
-  await page.getByLabel("Repository on the runner's machine").fill(repo);
+  await page.getByLabel(/^Folder on the runner's machine/).fill(repo);
   await page.getByLabel("Agent name").fill("term-agent");
   await page.getByRole("button", { name: "Create" }).click();
   await page.getByTestId("agent-row-term-agent").click();
@@ -516,7 +516,7 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
 
   // The next agent starts in the same repository, and a plain terminal runs the person's shell.
   await page.getByRole("button", { name: "New agent" }).click();
-  await expect(page.getByLabel("Repository on the runner's machine")).toHaveValue(repo);
+  await expect(page.getByLabel(/^Folder on the runner's machine/)).toHaveValue(repo);
   await page.getByRole("radio", { name: "Terminal" }).click();
   await expect(page.getByText("Coordination (goal · group · role)")).toHaveCount(0);
   await page.getByLabel("Agent name").fill("shell");
@@ -544,5 +544,19 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   await page.getByRole("button", { name: "Remove" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
   await expect(page.getByTestId("agent-row-shell")).toHaveCount(0);
+
+  // A folder that is not a git repository (one holding several, say) is used as it is.
+  const folder = tempDir("plain-folder");
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("radio", { name: "Terminal" }).click();
+  await page.getByLabel(/^Folder on the runner's machine/).fill(folder);
+  await page.getByLabel("Agent name").fill("in-folder");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("agent-row-in-folder").click();
+  await expect(page.getByTestId("agent-row-in-folder").locator("[data-icon]")).toHaveAttribute("data-icon", "terminal", { timeout: 30_000 });
+  await page.getByTestId("terminal").click();
+  await page.keyboard.type("pwd -P");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("terminal")).toContainText(realpathSync(folder));
   await expect(page.getByTestId("agent-row-term-agent")).toBeVisible();
 });

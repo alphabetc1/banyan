@@ -33,6 +33,16 @@ export async function ensureClone(repoUrl: string, repoDir: string): Promise<voi
   await exec("git", ["clone", repoUrl, repoDir]);
 }
 
+// Whether the folder is in a git repository whose HEAD has a commit to branch from.
+export async function hasCommit(dir: string): Promise<boolean> {
+  try {
+    await git(dir, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface CreatedWorktree {
   path: string;
   branch: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, authorize, draft, emptyRoomState, type Actor, type EventDraft, type RoomState } from "@banyan/shared";
-import { agentIcon, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
+import { agentFolder, agentIcon, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, inSavedOrder, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
 import { MESSAGES, reasonText } from "../src/i18n.ts";
 
 const NOW = 2_000_000_000_000;
@@ -140,6 +140,27 @@ describe("derive", () => {
     expect(icon("sh")).toBe("starting");
     report("sh", draft("agent.process_changed", { agentId: "sh", process: "running" }));
     expect(icon("sh")).toBe("terminal");
+  });
+
+  it("shows an agent's folder with the home directory as ~, or the room's fork", () => {
+    const s = room();
+    const agent = (repoPath: string | null) => ({ ...s.agents.w!, repoPath });
+    expect(agentFolder(s, agent("/Users/rhett/code/origin_sglang"))).toBe("~/code/origin_sglang");
+    expect(agentFolder(s, agent("/home/rhett"))).toBe("~");
+    expect(agentFolder(s, agent("/opt/work/sglang"))).toBe("/opt/work/sglang");
+    expect(agentFolder(s, agent("~/code/x"))).toBe("~/code/x");
+    s.room!.repoUrl = "git@github.com:me/sglang.git";
+    expect(agentFolder(s, agent(null))).toBe("sglang (fork)");
+    s.room!.repoUrl = null;
+    expect(agentFolder(s, agent(null))).toBe("");
+  });
+
+  it("puts agents in the saved order, with ones not placed yet after in their own order", () => {
+    const s = room();
+    const [w, l, m] = [s.agents.w!, s.agents.l!, s.agents.m!];
+    expect(inSavedOrder([w, l, m], ["m", "w"]).map((a) => a.id)).toEqual(["m", "w", "l"]);
+    expect(inSavedOrder([w, l, m], []).map((a) => a.id)).toEqual(["w", "l", "m"]);
+    expect(inSavedOrder([w, l], ["gone", "l"]).map((a) => a.id)).toEqual(["l", "w"]);
   });
 
   it("keys attention items by what they are about", () => {

@@ -1,7 +1,7 @@
 // Supervisor: starts, resumes and watches the agents assigned to this runner, translating
 // provider callbacks into room events and room events into agent input.
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { agentGroup, draft, isPlainAgent, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
@@ -9,7 +9,7 @@ import type { Logger } from "./logger.ts";
 import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
-import { commitAll, createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
+import { commitAll, createWorktree, ensureClone, hasCommit, pushBranch, worktreeStatus } from "./worktree.ts";
 
 const TRANSCRIPT_BATCH_MAX = 200;
 const CRASH_RESTART_DELAY_MS = 5000;
@@ -146,8 +146,14 @@ export class Supervisor {
 
   // Workers get their own worktree, in their local repository if they have one and in the
   // room's fork otherwise; leaders and monitors read the repository itself.
+  // A local folder that is not a git repository with a commit to branch from is used as it
+  // is, without a worktree of its own.
   private async workingDirectory(agent: Agent): Promise<string> {
     const repoDir = agent.repoPath ? expandHome(agent.repoPath) : await this.repo();
+    if (agent.repoPath) {
+      if (!existsSync(repoDir) || !statSync(repoDir).isDirectory()) throw new Error(`no such folder: ${repoDir}`);
+      if (!(await hasCommit(repoDir))) return repoDir;
+    }
     if (agent.role !== "worker") return repoDir;
     const known = this.opts.store.worktree(agent.id);
     if (known) return known.path;

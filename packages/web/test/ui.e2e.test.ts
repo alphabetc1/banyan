@@ -170,7 +170,8 @@ test("builds the goal tree and group from the UI, then shows live agent state an
   await page.getByRole("link", { name: "Overview" }).click();
   const row = page.getByTestId("group-prefill team").getByTestId("agent-row-tok-worker");
   await expect(row.locator("[data-icon]")).toHaveAttribute("data-icon", "working");
-  await expect(row).toContainText("Working · waiting_gpu");
+  await expect(row).toContainText("waiting_gpu");
+  await expect(row.locator("[data-kind]")).toHaveAttribute("data-kind", "codex");
   await expect(page.locator(".facts")).toContainText("prefill team");
 
   // Dropping the runner connection turns it offline again without a reload.
@@ -319,6 +320,42 @@ test("restarts a stopped agent and removes one after asking, only for its owner"
   await expect(guest.getByRole("button", { name: "Remove" })).toHaveCount(0);
   await expect(guest.getByRole("button", { name: "Start again" })).toHaveCount(0);
   await other.close();
+});
+
+test("reorders agents by dragging, keeps the order, and shows each agent's kind and folder", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const common = { groupId: null, runnerId: runner.runnerId, role: "worker" as const, model: "default", goalId: room.rootGoalId, instructions: "", terminal: true };
+  await member.append([
+    draft("agent.created", { ...common, agentId: newId(), name: "one", provider: "claude", repoPath: "/Users/rhett/code/origin_sglang" }),
+    draft("agent.created", { ...common, agentId: newId(), name: "two", provider: "codex" }),
+    draft("agent.created", { ...common, agentId: newId(), name: "three", provider: "shell", repoPath: "/opt/work" }),
+  ]);
+  const names = () => page.locator(".agent-row .name").allTextContents();
+  await expect.poll(names).toEqual(["one", "two", "three"]);
+  await expect(page.getByTestId("agent-row-one")).toContainText("~/code/origin_sglang");
+  await expect(page.getByTestId("agent-row-two")).toContainText("sglang (fork)");
+  await expect(page.getByTestId("agent-row-three").locator("[data-kind]")).toHaveAttribute("data-kind", "shell");
+
+  // Drag "three" up past both others with the mouse.
+  const from = (await page.getByTestId("agent-row-three").boundingBox())!;
+  const to = (await page.getByTestId("agent-row-one").boundingBox())!;
+  await page.mouse.move(from.x + 40, from.y + from.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(from.x + 40, from.y + from.height / 2 - ((from.y - to.y + 4) * i) / 10);
+  await page.mouse.up();
+  await expect.poll(names).toEqual(["three", "one", "two"]);
+  // A drag does not open the agent it moved.
+  await expect(page).toHaveURL(`${base}/rooms/${room.roomId}`);
+
+  // The arrangement survives a reload; a plain click still opens an agent; Alt+Down moves one.
+  await page.reload();
+  await expect.poll(names).toEqual(["three", "one", "two"]);
+  await page.getByTestId("agent-row-one").click();
+  await expect(page.locator(".agent-main h2")).toHaveText("one");
+  await page.getByTestId("agent-row-one").press("Alt+ArrowDown");
+  await expect.poll(names).toEqual(["three", "two", "one"]);
 });
 
 test("shows an error instead of loading forever when saved credentials are rejected", async ({ page }) => {

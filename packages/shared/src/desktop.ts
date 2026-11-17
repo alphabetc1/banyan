@@ -35,9 +35,9 @@ export interface DesktopBridge {
   setServerUrl(url: string): Promise<void>;
   // Credentials of the client's own local workspace; only given to pages it serves itself.
   localWorkspace(): Promise<{ roomId: string; roomName: string; memberId: string; memberToken: string } | null>;
-  // Lets the person pick a git repository on this machine, starting in startIn if given (the
-  // last one used); resolves to its top-level path, or null when cancelled. Rejects when the
-  // folder is not inside a git repository.
+  // Lets the person pick a folder on this machine, starting in startIn if given (the last one
+  // used); resolves to the top level of its git repository when it is in one, to the folder
+  // itself otherwise, or to null when cancelled.
   pickRepository(startIn: string | null): Promise<string | null>;
   openLocalWorkspace(): void;
   // Extra arguments for Claude Code and Codex terminals on this machine, as typed (one line

@@ -470,8 +470,41 @@ label {
   color: var(--text);
   text-decoration: none;
 }
+.agent-row {
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  touch-action: none;
+}
 .agent-row:hover {
   background: var(--surface-raised);
+}
+.agent-row.dragging {
+  background: var(--surface-raised);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  cursor: grabbing;
+}
+.agent-row .folder {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.kind-icon {
+  flex: none;
+}
+/* A working agent's mascot hops in place, like a Dynamic Island companion. */
+.kind-icon.active {
+  animation: mascot-hop 0.9s steps(2, jump-none) infinite;
+}
+@keyframes mascot-hop {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-1.5px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kind-icon.active {
+    animation: none;
+  }
 }
 .agent-row.selected {
   background: var(--accent-soft);
