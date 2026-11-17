@@ -1,18 +1,23 @@
-// Client settings kept in the app's user data directory: which room server to show and which
-// rooms run a runner on this machine.
+// Client settings kept in the app's user data directory: the team room server, the local
+// workspace, which one was open last, and which rooms run a runner on this machine.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { LocalWorkspace } from "./local-workspace.ts";
 
 export interface Settings {
   serverUrl: string | null;
+  localWorkspace: LocalWorkspace | null;
+  lastOpened: "local" | "team";
   enabledRooms: string[];
 }
+
+const DEFAULTS: Settings = { serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [] };
 
 export class SettingsFile {
   private value: Settings;
 
   constructor(private readonly path: string) {
-    this.value = existsSync(path) ? { serverUrl: null, enabledRooms: [], ...(JSON.parse(readFileSync(path, "utf8")) as Partial<Settings>) } : { serverUrl: null, enabledRooms: [] };
+    this.value = existsSync(path) ? { ...DEFAULTS, ...(JSON.parse(readFileSync(path, "utf8")) as Partial<Settings>) } : { ...DEFAULTS };
   }
 
   get(): Settings {

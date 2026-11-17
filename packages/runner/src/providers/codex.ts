@@ -19,6 +19,8 @@ type Json = Record<string, any>;
 // The Room MCP server name as registered in each thread's config.
 const ROOM_SERVER = "room";
 
+const KILL_GRACE_MS = 5000;
+
 class AppServerProcess {
   private proc: ChildProcessWithoutNullStreams;
   private nextId = 1;
@@ -75,8 +77,14 @@ class AppServerProcess {
     this.write({ method });
   }
 
-  kill(): void {
+  // Asks the process to exit and waits until it has, forcing it after a grace period, so a
+  // stopped runner leaves no app-server behind.
+  async kill(): Promise<void> {
+    if (this.proc.exitCode !== null || this.proc.signalCode !== null) return;
     this.proc.kill("SIGTERM");
+    const forced = setTimeout(() => this.proc.kill("SIGKILL"), KILL_GRACE_MS);
+    await this.exited;
+    clearTimeout(forced);
   }
 }
 
@@ -306,6 +314,6 @@ export class CodexProvider implements AgentProvider {
 
   async close(): Promise<void> {
     for (const s of [...this.sessions.values()]) await s.stop();
-    this.proc?.kill();
+    await this.proc?.kill();
   }
 }

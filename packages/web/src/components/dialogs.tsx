@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { draft, isGoalWithin, newId, type Agent } from "@banyan/shared";
 import { createInvite } from "../api.ts";
 import { useRoomStore } from "../contexts.ts";
-import { inDesktopClient, installCommand } from "../desktop.tsx";
+import { inDesktopClient, installCommand, pickRepository } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 import { Dialog, useAction } from "./common.tsx";
 
@@ -93,7 +93,20 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
     model: "default",
     agentGoalId: goalId,
     instructions: "",
+    repoPath: "",
+    // Claude agents started from the desktop client default to Claude Code's own terminal.
+    terminal: inDesktopClient,
   });
+  // A room without a shared fork needs every agent to name a repository.
+  const needsRepo = !state.room?.repoUrl;
+  const [pickError, setPickError] = useState<string | null>(null);
+  const pick = () => {
+    setPickError(null);
+    void pickRepository().then(
+      (path) => path && setForm((f) => ({ ...f, repoPath: path })),
+      (e: Error) => setPickError(e.message),
+    );
+  };
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   // An empty groupId means a standalone agent, which can only be a worker.
   const group = form.groupId ? state.groups[form.groupId] : undefined;
@@ -103,8 +116,10 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const { agentGoalId, groupId, ...rest } = form;
-    void action.run(() => store.append([draft("agent.created", { ...rest, agentId: newId(), groupId: groupId || null, goalId: agentGoalId })])).then((ok) => ok && onClose());
+    const { agentGoalId, groupId, repoPath, terminal, ...rest } = form;
+    const repo = repoPath.trim() ? { repoPath: repoPath.trim() } : {};
+    const mode = terminal && rest.provider === "claude" ? { terminal: true } : {};
+    void action.run(() => store.append([draft("agent.created", { ...rest, ...repo, ...mode, agentId: newId(), groupId: groupId || null, goalId: agentGoalId })])).then((ok) => ok && onClose());
   };
   return (
     <Dialog title={t("overview.newAgent")} onClose={onClose}>
@@ -137,6 +152,18 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
           {t("dialog.agentName")}
           <input required autoFocus value={form.name} onChange={set("name")} />
         </label>
+        <label>
+          {t(needsRepo ? "dialog.repoPath" : "dialog.repoPathOptional")}
+          <div className="row">
+            <input required={needsRepo} value={form.repoPath} onChange={set("repoPath")} placeholder="~/code/sglang" />
+            {inDesktopClient && (
+              <button type="button" onClick={pick}>
+                {t("dialog.pickRepo")}
+              </button>
+            )}
+          </div>
+        </label>
+        {pickError && <span className="error">{pickError}</span>}
         <div className="row">
           <label style={{ flex: 1 }}>
             {t("agent.provider")}
@@ -156,6 +183,12 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
             </select>
           </label>
         </div>
+        {form.provider === "claude" && (
+          <label className="row" style={{ gap: 8 }}>
+            <input type="checkbox" checked={form.terminal} onChange={(e) => setForm({ ...form, terminal: e.target.checked })} style={{ width: "auto" }} />
+            {t("dialog.terminal")}
+          </label>
+        )}
         <label>
           {t("dialog.model")}
           <input required value={form.model} onChange={set("model")} />

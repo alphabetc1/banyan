@@ -1,12 +1,15 @@
-// Banyan desktop client: a window onto the room server's web UI plus the runners for the
-// rooms this machine hosts. Closing the window keeps runners going in the tray; quitting
-// stops them gracefully.
-import { hostname } from "node:os";
+// Banyan desktop client: its own local workspace (a room server inside the client), a window
+// onto that or a team room server, and the runners for the rooms this machine hosts.
+// Closing the window keeps runners going in the tray; quitting stops them gracefully.
+import { execFile } from "node:child_process";
+import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { readSavedRunner, registerRunner } from "@banyan/runner/registration";
 import type { LocalRunnerStatus } from "@banyan/shared";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { ensureLocalWorkspace, startLocalServer, type LocalServer } from "./local-workspace.ts";
 import { RunnerManager } from "./runner-manager.ts";
 import { normalizeServerUrl, SettingsFile } from "./settings.ts";
 import { loginShellPath } from "./shell-env.ts";
@@ -14,6 +17,7 @@ import { loginShellPath } from "./shell-env.ts";
 const here = import.meta.dirname;
 const SETUP_URL = pathToFileURL(join(here, "setup.html")).href;
 const zh = () => app.getLocale().startsWith("zh");
+const DEFAULT_LOCAL_PORT = 7710;
 
 // Lets a test or a second profile keep its client settings apart.
 if (process.env.BANYAN_DESKTOP_DATA) app.setPath("userData", process.env.BANYAN_DESKTOP_DATA);
@@ -23,6 +27,26 @@ let tray: Tray | null = null;
 let quitting = false;
 let settings: SettingsFile;
 let runners: RunnerManager;
+let localServer: LocalServer;
+
+function localUrl(): string {
+  return `${localServer.url}/rooms/${settings.get().localWorkspace!.roomId}`;
+}
+
+// What the window shows on launch: whichever of the local workspace and the team server was
+// open last.
+function startUrl(): string {
+  const { serverUrl, lastOpened } = settings.get();
+  return lastOpened === "team" && serverUrl ? serverUrl : localUrl();
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
 
 function runnerEnv(): NodeJS.ProcessEnv {
   const path = process.platform === "win32" ? null : loginShellPath(process.env.SHELL ?? "/bin/zsh");
@@ -55,21 +79,28 @@ function showWindow(): BrowserWindow {
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
-    if (url === SETUP_URL || new URL(url).origin === settings.get().serverUrl) return;
+    if (url === SETUP_URL || originOf(url) === settings.get().serverUrl || originOf(url) === localServer.url) return;
     e.preventDefault();
     if (/^https?:/.test(url)) void shell.openExternal(url);
   });
+  win.webContents.on("did-navigate", (_e, url) => {
+    if (originOf(url) === localServer.url) settings.update({ lastOpened: "local" });
+    else if (originOf(url) === settings.get().serverUrl) settings.update({ lastOpened: "team" });
+  });
   window = win;
-  void win.loadURL(settings.get().serverUrl ?? SETUP_URL);
+  void win.loadURL(startUrl());
   return win;
 }
 
-// Only the configured room server's pages and the setup page may use the bridge.
+// Only pages of the local workspace, the configured team server and the setup page may use
+// the bridge.
 function trusted(e: IpcMainEvent | IpcMainInvokeEvent): boolean {
   const url = e.senderFrame?.url;
   if (!url) return false;
-  return url === SETUP_URL || new URL(url).origin === settings.get().serverUrl;
+  return url === SETUP_URL || originOf(url) === settings.get().serverUrl || originOf(url) === localServer.url;
 }
+
+const fromLocalWorkspace = (e: IpcMainEvent | IpcMainInvokeEvent) => originOf(e.senderFrame?.url ?? "") === localServer.url;
 
 function guard<A extends unknown[], R>(handler: (...args: A) => R) {
   return (e: IpcMainInvokeEvent, ...args: A): R => {
@@ -84,17 +115,29 @@ async function setServerUrl(input: string): Promise<void> {
     throw new Error(`${zh() ? "无法连接" : "cannot reach"} ${serverUrl}: ${e.message}`);
   });
   if (!res.ok) throw new Error(`${serverUrl}/api/health → ${res.status}`);
-  settings.update({ serverUrl });
+  settings.update({ serverUrl, lastOpened: "team" });
   void showWindow().loadURL(serverUrl);
 }
 
-async function enableRunner(roomId: string, memberToken: string): Promise<void> {
-  const serverUrl = settings.get().serverUrl;
-  if (!serverUrl) throw new Error("no room server configured");
+// serverUrl is the server of the page that asked, the local workspace's or the team's.
+async function enableRunner(serverUrl: string, roomId: string, memberToken: string): Promise<void> {
   if (!readSavedRunner(roomId)) await registerRunner({ serverUrl, roomId, memberToken, hostname: hostname() });
   const enabled = settings.get().enabledRooms;
   if (!enabled.includes(roomId)) settings.update({ enabledRooms: [...enabled, roomId] });
   runners.start(roomId);
+}
+
+// The folder the person picks, as the top level of the git repository it belongs to.
+async function pickRepository(): Promise<string | null> {
+  const picked = await dialog.showOpenDialog(showWindow(), { properties: ["openDirectory"], title: zh() ? "选择仓库" : "Choose a repository" });
+  const folder = picked.filePaths[0];
+  if (picked.canceled || !folder) return null;
+  try {
+    const { stdout } = await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: folder, env: runnerEnv() });
+    return stdout.trim();
+  } catch {
+    throw new Error(`${zh() ? "不是 git 仓库" : "not a git repository"}: ${folder}`);
+  }
 }
 
 async function disableRunner(roomId: string): Promise<void> {
@@ -105,9 +148,10 @@ async function disableRunner(roomId: string): Promise<void> {
 function notify(title: string, body: string, path: string): void {
   const n = new Notification({ title, body });
   n.on("click", () => {
-    const serverUrl = settings.get().serverUrl;
+    // Notifications come from the page on show, which is the one the path belongs to.
     const win = showWindow();
-    if (serverUrl) void win.loadURL(new URL(path, serverUrl).href);
+    const origin = originOf(win.webContents.getURL());
+    if (origin) void win.loadURL(new URL(path, origin).href);
   });
   n.show();
 }
@@ -161,19 +205,47 @@ function broadcast(list: LocalRunnerStatus[]): void {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => showWindow());
+  // Both can arrive before the local workspace is up; the window opens once it is.
+  app.on("second-instance", () => localServer && showWindow());
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     settings = new SettingsFile(join(app.getPath("userData"), "settings.json"));
     // Set by the room server's install script, which knows the server it was downloaded from.
     const presetServer = app.commandLine.getSwitchValue("server-url");
-    if (presetServer) settings.update({ serverUrl: normalizeServerUrl(presetServer) });
+    if (presetServer) settings.update({ serverUrl: normalizeServerUrl(presetServer), lastOpened: "team" });
     runners = new RunnerManager({ hostScript: join(here, "runner-host.mjs"), logDir: join(app.getPath("userData"), "logs"), env: runnerEnv(), onChange: broadcast });
+    try {
+      await openLocalWorkspace();
+    } catch (e) {
+      dialog.showErrorBox("Banyan", `${zh() ? "无法启动本地工作区" : "Cannot start the local workspace"}: ${(e as Error).message}`);
+      app.exit(1);
+      return;
+    }
 
     ipcMain.handle("runners:list", guard(() => runners.list()));
-    ipcMain.handle("runners:enable", guard((roomId: string, memberToken: string) => enableRunner(roomId, memberToken)));
+    ipcMain.handle("runners:enable", (e, roomId: string, memberToken: string) => {
+      if (!trusted(e)) throw new Error("not allowed from this page");
+      return enableRunner(originOf(e.senderFrame!.url)!, roomId, memberToken);
+    });
     ipcMain.handle("runners:disable", guard((roomId: string) => disableRunner(roomId)));
     ipcMain.handle("settings:server-url", guard((url: string) => setServerUrl(url)));
+    ipcMain.handle("local:workspace", (e) => (fromLocalWorkspace(e) ? settings.get().localWorkspace : null));
+    ipcMain.handle("repo:pick", guard(() => pickRepository()));
+    ipcMain.on("terminal:open", (e, req: { roomId: string; agentId: string }) => {
+      const port = e.ports[0];
+      if (!port) return;
+      if (!trusted(e)) {
+        port.close();
+        return;
+      }
+      runners.openTerminal(req.roomId, req.agentId, port);
+    });
+    ipcMain.on("open:local", (e) => {
+      if (trusted(e)) void showWindow().loadURL(localUrl());
+    });
+    ipcMain.on("open:team", (e) => {
+      if (trusted(e)) void showWindow().loadURL(settings.get().serverUrl ?? SETUP_URL);
+    });
     ipcMain.on("notify", (e, title: string, body: string, path: string) => {
       if (trusted(e)) notify(title, body, path);
     });
@@ -185,7 +257,7 @@ if (!app.requestSingleInstanceLock()) {
     showWindow();
   });
 
-  app.on("activate", () => showWindow());
+  app.on("activate", () => localServer && showWindow());
   // Service managers and the install script ask the client to quit this way.
   process.on("SIGTERM", () => app.quit());
 
@@ -193,6 +265,23 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting || !runners) return;
     quitting = true;
     e.preventDefault();
-    void runners.stopAll().finally(() => app.quit());
+    void runners
+      .stopAll()
+      .then(() => {
+        // The window goes before the server it shows, so the page never sees the server drop.
+        for (const win of BrowserWindow.getAllWindows()) win.destroy();
+        return localServer?.close();
+      })
+      .finally(() => app.quit());
   });
+}
+
+// Starts the local room server, creates the local workspace on first launch and runs its runner.
+async function openLocalWorkspace(): Promise<void> {
+  const port = process.env.BANYAN_LOCAL_PORT ? Number(process.env.BANYAN_LOCAL_PORT) : DEFAULT_LOCAL_PORT;
+  localServer = await startLocalServer({ dataDir: app.getPath("userData"), webDir: join(here, "web"), port });
+  const names = zh() ? { room: "本地", goal: "本地工作", owner: userInfo().username } : { room: "Local", goal: "Local work", owner: userInfo().username };
+  const workspace = await ensureLocalWorkspace(localServer.url, settings.get().localWorkspace, names);
+  settings.update({ localWorkspace: workspace });
+  await enableRunner(localServer.url, workspace.roomId, workspace.memberToken);
 }

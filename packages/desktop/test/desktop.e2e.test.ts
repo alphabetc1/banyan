@@ -1,8 +1,10 @@
-// Desktop client end to end: a real room server serving the built UI, the built Electron app,
-// and the real runner it hosts, driving real Claude Code and Codex agents (costs a little real
-// API usage). Run with `pnpm --filter @banyan/desktop test:e2e`.
+// Desktop client end to end: the built Electron app with its own local workspace, a real team
+// room server serving the built UI, and the real runners the app hosts, driving real Claude
+// Code and Codex agents (costs a little real API usage).
+// Run with `pnpm --filter @banyan/desktop test:e2e`.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +18,17 @@ const WEB_DIR = fileURLToPath(new URL("../../web/dist", import.meta.url));
 let server: TestServer;
 let banyanHome: string;
 let clientData: string;
+let localPort: number;
+
+// A port free right now, for the app's local workspace server.
+function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const probe = createServer().listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() as { port: number };
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 test.beforeAll(async () => {
   server = new TestServer(undefined, WEB_DIR);
@@ -26,9 +39,10 @@ test.afterAll(async () => {
   await server.stop();
 });
 
-test.beforeEach(() => {
+test.beforeEach(async () => {
   banyanHome = tempDir("desktop-home");
   clientData = tempDir("desktop-data");
+  localPort = await freePort();
 });
 
 // Page output must stay clean: any console warning, error or uncaught exception fails the test.
@@ -45,7 +59,7 @@ async function launch(env: NodeJS.ProcessEnv = {}): Promise<{ app: ElectronAppli
   const app = await electron.launch({
     // English UI regardless of the machine's language, so the assertions can match text.
     args: [APP_DIR, "--lang=en-US"],
-    env: { ...process.env, BANYAN_HOME: banyanHome, BANYAN_DESKTOP_DATA: clientData, ...env },
+    env: { ...process.env, BANYAN_HOME: banyanHome, BANYAN_DESKTOP_DATA: clientData, BANYAN_LOCAL_PORT: String(localPort), ...env },
   });
   launched.push(app);
   const page = await app.firstWindow();
@@ -56,7 +70,12 @@ async function launch(env: NodeJS.ProcessEnv = {}): Promise<{ app: ElectronAppli
   return { app, page };
 }
 
+const settingsFile = () => JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8")) as { serverUrl: string | null; enabledRooms: string[]; localWorkspace: { roomId: string } };
+
+// The app opens on its local workspace; team rooms are reached through the room switcher.
 async function connectAndCreateRoom(page: Page, fork = createFork()): Promise<string> {
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await page.getByLabel("Room").selectOption({ label: "Team room server…" });
   await page.getByPlaceholder("http://banyan-host:7700").fill(server.base.replace("http://", ""));
   await page.getByRole("button", { name: /Connect/ }).click();
   await expect(page.getByRole("heading", { name: "Banyan" })).toBeVisible();
@@ -115,7 +134,8 @@ test("connects to a room server, hosts a runner, keeps it in the tray and restor
   await page.getByRole("button", { name: "Stop local runner" }).click();
   await expect(page.getByRole("button", { name: "Run agents on this machine" })).toBeVisible();
   expect(existsSync(lockPath(roomId))).toBe(false);
-  expect(JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8"))).toEqual({ serverUrl: server.base, enabledRooms: [] });
+  // Only the local workspace's runner stays enabled.
+  expect(settingsFile()).toMatchObject({ serverUrl: server.base, enabledRooms: [settingsFile().localWorkspace.roomId] });
   await app.close();
 });
 
@@ -134,10 +154,61 @@ test("reports a room whose runner is already running elsewhere instead of starti
 
 test("rejects a room server address it cannot reach", async () => {
   const { app, page } = await launch();
+  await page.getByLabel("Room").selectOption({ label: "Team room server…" });
   await page.getByPlaceholder("http://banyan-host:7700").fill("127.0.0.1:9");
   await page.getByRole("button", { name: /Connect/ }).click();
   await expect(page.getByRole("alert")).toContainText("cannot reach http://127.0.0.1:9");
-  expect(existsSync(join(clientData, "settings.json"))).toBe(false);
+  expect(settingsFile().serverUrl).toBeNull();
+  await app.close();
+});
+
+test("opens a local workspace on first launch and runs agents in a repository on this machine", async () => {
+  test.setTimeout(10 * 60_000);
+  // A repository of the person's own, on a feature branch, with a remote of its own.
+  const remote = createFork();
+  const repo = join(tempDir("own-repo"), "repo");
+  execFileSync("git", ["clone", "-q", remote, repo]);
+  execFileSync("git", ["checkout", "-q", "-b", "feature"], { cwd: repo });
+
+  let { app, page } = await launch();
+  const localBase = `http://127.0.0.1:${localPort}`;
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  const roomId = settingsFile().localWorkspace.roomId;
+  await expect(page).toHaveURL(`${localBase}/rooms/${roomId}`);
+  await expect(page.getByLabel("Room").locator("option:checked")).toHaveText("Local");
+  await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
+
+  await page.getByRole("button", { name: "New agent" }).click();
+  const repoField = page.getByLabel("Repository on the runner's machine");
+  await expect(repoField).toHaveAttribute("required", "");
+  await repoField.fill(repo);
+  // A managed session here; the terminal has its own test.
+  await page.getByLabel(/Run in Claude Code's own terminal/).uncheck();
+  await page.getByLabel("Agent name").fill("local-worker");
+  await page.getByLabel("Instructions").fill('This is an automated test of Banyan. Call room_set_status with phase "done", then reply DONE. Do nothing else.');
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByTestId("agent-row-local-worker")).toBeVisible();
+
+  const token = await memberToken(page);
+  const state = async () => {
+    const res = await fetch(`${localBase}/api/rooms/${roomId}/state`, { headers: { authorization: `Bearer ${token}` } });
+    return ((await res.json()) as { state: import("@banyan/shared").RoomState }).state;
+  };
+  const agent = await waitFor(async () => {
+    const a = Object.values((await state()).agents).find((x) => x.name === "local-worker");
+    return a?.phase?.value === "done" ? a : null;
+  }, "the local agent reporting done", 5 * 60_000, 1000);
+  expect(agent).toMatchObject({ repoPath: repo, groupId: null });
+  const worktreePath = join(banyanHome, "rooms", roomId, "worktrees", agent.id);
+  expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" })).toContain(worktreePath);
+  expect(execFileSync("git", ["ls-remote", "--heads", remote], { encoding: "utf8" })).not.toContain("banyan/");
+
+  // The workspace and its agent are still there after a restart.
+  await app.close();
+  ({ app, page } = await launch());
+  await expect(page).toHaveURL(`${localBase}/rooms/${roomId}`);
+  await expect(page.getByTestId("agent-row-local-worker")).toBeVisible();
+  expect(settingsFile().localWorkspace.roomId).toBe(roomId);
   await app.close();
 });
 
@@ -332,4 +403,55 @@ test("gives Claude agents the user's Claude Code setup, including skills started
   // The person's own message is part of the conversation.
   await expect(page.locator(".entry.user", { hasText: "/banyan-slash" })).toContainText("Rhett");
   await expect(page.getByTestId("pending-message")).toHaveCount(0);
+});
+
+test("runs a Claude agent in its own terminal inside the window, typed into like Claude Code itself", async () => {
+  test.setTimeout(10 * 60_000);
+  const repo = join(tempDir("term-repo"), "repo");
+  execFileSync("git", ["clone", "-q", createFork(), repo]);
+  const { page } = await launch();
+  const localBase = `http://127.0.0.1:${localPort}`;
+  const roomId = settingsFile().localWorkspace.roomId;
+  await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
+
+  await page.getByRole("button", { name: "New agent" }).click();
+  // Claude agents default to the terminal in the desktop client.
+  await expect(page.getByLabel(/Run in Claude Code's own terminal/)).toBeChecked();
+  await page.getByLabel("Repository on the runner's machine").fill(repo);
+  await page.getByLabel("Agent name").fill("term-agent");
+  await page.getByLabel("Instructions").fill('This is an automated test of Banyan. Call room_set_status with phase "terminal-ok", then reply DONE and wait.');
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("agent-row-term-agent").click();
+  const terminal = page.getByTestId("terminal");
+  await expect(terminal).toBeVisible();
+  await expect(page.getByTestId("transcript")).toHaveCount(0);
+  // The terminal takes the full width; details open on request.
+  await expect(page.locator(".facts")).toHaveCount(0);
+  await page.getByRole("button", { name: "Details" }).click();
+  await expect(page.locator(".facts")).toContainText("Standalone");
+  await page.getByRole("button", { name: "Details" }).click();
+  await expect(page.locator(".facts")).toHaveCount(0);
+
+  const token = await memberToken(page);
+  const agentState = async () => {
+    const res = await fetch(`${localBase}/api/rooms/${roomId}/state`, { headers: { authorization: `Bearer ${token}` } });
+    const state = ((await res.json()) as { state: import("@banyan/shared").RoomState }).state;
+    return Object.values(state.agents).find((a) => a.name === "term-agent");
+  };
+  // The repository is in a folder Claude Code has never trusted; the person answers in the
+  // terminal, and the list shows the agent waiting for them meanwhile.
+  await expect(terminal).toContainText(/trust this folder/i, { timeout: 60_000 });
+  await expect(page.getByTestId("agent-row-term-agent")).toContainText("waiting for you in its terminal");
+  await terminal.click();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await waitFor(async () => (await agentState())?.phase?.value === "terminal-ok", "the terminal agent reporting through the Room MCP", 5 * 60_000, 1000);
+  await waitFor(async () => (await agentState())?.activity === "idle", "the turn to end", 2 * 60_000, 500);
+
+  // Typing into the terminal talks to Claude Code directly.
+  await terminal.click();
+  await page.keyboard.type('Call room_set_status with phase "typed-ok".');
+  await page.keyboard.press("Enter");
+  await waitFor(async () => (await agentState())?.phase?.value === "typed-ok", "the agent acting on typed input", 5 * 60_000, 1000);
+  await expect(terminal).toContainText("typed-ok");
 });

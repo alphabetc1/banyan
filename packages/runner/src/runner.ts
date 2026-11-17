@@ -7,6 +7,8 @@ import { AgentProcesses, killLeftoverAgentProcesses } from "./agent-processes.ts
 import { ServerLink } from "./link.ts";
 import { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
+import { ClaudeTerminalProvider } from "./providers/claude-terminal.ts";
+import type { TerminalHandle } from "./providers/types.ts";
 import { ClaudeProvider } from "./providers/claude.ts";
 import { CodexProvider } from "./providers/codex.ts";
 import { RoomMcp } from "./room-mcp.ts";
@@ -30,7 +32,7 @@ export class Runner {
   readonly link: ServerLink;
   readonly mcp: RoomMcp;
   readonly supervisor: Supervisor;
-  private providers: { claude: ClaudeProvider; codex: CodexProvider };
+  private providers: { claude: ClaudeProvider; codex: CodexProvider; claudeTerminal: ClaudeTerminalProvider };
 
   constructor(
     private readonly config: RunnerConfig,
@@ -54,7 +56,11 @@ export class Runner {
     const emit = (drafts: EventDraft[], asAgent: string | null = null) => this.link.emit(drafts, asAgent);
     this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message) });
     const processes = new AgentProcesses(config.roomDir);
-    this.providers = { claude: new ClaudeProvider(processes, config.claudePermissionMode), codex: new CodexProvider(log, processes) };
+    this.providers = {
+      claude: new ClaudeProvider(processes, config.claudePermissionMode),
+      codex: new CodexProvider(log, processes),
+      claudeTerminal: new ClaudeTerminalProvider(processes, config.claudePermissionMode),
+    };
     supervisor = new Supervisor({
       runnerId: config.runnerId,
       roomDir: config.roomDir,
@@ -74,8 +80,14 @@ export class Runner {
     const leftovers = await killLeftoverAgentProcesses(this.config.roomDir);
     if (leftovers.length > 0) this.log.warn(`ended agent process(es) left by a previous runner: ${leftovers.join(", ")}`);
     await this.mcp.start();
+    await this.providers.claudeTerminal.open();
     await this.link.start();
     await this.supervisor.start();
+  }
+
+  // The live terminal of a terminal-mode agent this runner hosts.
+  terminal(agentId: string): TerminalHandle | null {
+    return this.supervisor.terminal(agentId);
   }
 
   async stop(): Promise<void> {
@@ -84,6 +96,7 @@ export class Runner {
     await this.link.drain(STOP_DRAIN_MS);
     await this.providers.claude.close();
     await this.providers.codex.close();
+    await this.providers.claudeTerminal.close();
     await this.mcp.close();
     this.link.close();
     this.store.close();

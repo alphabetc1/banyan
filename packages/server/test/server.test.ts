@@ -168,6 +168,16 @@ describe("rooms and membership", () => {
     expect(state.runners[f.runnerId]).toEqual({ id: f.runnerId, memberId: f.ownerId, hostname: "mac" });
   });
 
+  it("creates a room without a shared fork, and requires a fork's URL and branch together", async () => {
+    const created = await post("/api/rooms", { name: "local", goalTitle: "Local work", ownerName: "Rhett" });
+    expect(created.status).toBe(200);
+    const state = (await get(`/api/rooms/${created.json.roomId}/state`, created.json.memberToken)).json.state as RoomState;
+    expect(state.room).toMatchObject({ name: "local", repoUrl: null, baseBranch: null });
+    const half = await post("/api/rooms", { name: "x", repoUrl: "git@example.com:x.git", goalTitle: "g", ownerName: "Rhett" });
+    expect(half.status).toBe(400);
+    expect(half.json.error).toContain("repoUrl and baseBranch go together");
+  });
+
   it("rejects bad request bodies", async () => {
     const { status, json } = await post("/api/rooms", { name: "" });
     expect(status).toBe(400);

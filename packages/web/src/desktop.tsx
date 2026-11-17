@@ -1,16 +1,57 @@
 // Features available only inside the Banyan desktop client, which exposes window.banyanDesktop:
 // running a runner for this room on the local machine, and system notifications.
 import { useEffect, useRef, useState } from "react";
-import type { DesktopBridge, LocalRunnerStatus } from "@banyan/shared";
+import type { DesktopBridge, LocalRunnerStatus, TerminalConnection } from "@banyan/shared";
 import { useNow } from "./components/common.tsx";
 import { attentionItems, attentionKey, ownAttention, type AttentionItem } from "./derive.ts";
 import { useReasonText, useT } from "./i18n.ts";
 import type { RoomStore } from "./room-store.ts";
 import { routePath } from "./router.ts";
+import { roomCredentials, saveRoom } from "./session.ts";
 
 const desktop = (window as { banyanDesktop?: DesktopBridge }).banyanDesktop;
 
 export const inDesktopClient = desktop !== undefined;
+
+// The desktop client creates its local workspace itself and hands its credentials only to the
+// pages it serves; they are saved like any joined room.
+export async function adoptLocalWorkspace(): Promise<void> {
+  const local = await desktop?.localWorkspace();
+  if (local && !roomCredentials(local.roomId)) saveRoom(local);
+}
+
+export async function pickRepository(): Promise<string | null> {
+  if (!desktop) return null;
+  return desktop.pickRepository().catch((e: Error) => Promise.reject(bridgeError(e)));
+}
+
+export function openLocalWorkspace(): void {
+  desktop?.openLocalWorkspace();
+}
+
+export function openTeamServer(): void {
+  desktop?.openTeamServer();
+}
+
+export function openTerminal(roomId: string, agentId: string, onData: (data: string) => void, onClose: (reason: string) => void): TerminalConnection {
+  if (!desktop) {
+    onClose("terminals are only available in the desktop client");
+    return { write() {}, resize() {}, close() {} };
+  }
+  return desktop.openTerminal(roomId, agentId, onData, onClose);
+}
+
+// Ids of the runners this machine hosts and are running, per room.
+export function useLocalRunnerIds(): string[] {
+  const [ids, setIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!desktop) return;
+    const pick = (list: LocalRunnerStatus[]) => setIds(list.filter((r) => r.state === "running" && r.runnerId).map((r) => r.runnerId!));
+    void desktop.listRunners().then(pick);
+    return desktop.onRunnersChanged(pick);
+  }, []);
+  return ids;
+}
 
 // One command that installs the client for the Mac's architecture and points it at this server.
 export function installCommand(origin: string): string {
@@ -107,5 +148,7 @@ function notificationBody(item: AttentionItem, reasonText: ReturnType<typeof use
       return item.reasons.map(reasonText).join(", ");
     case "review":
       return item.summary;
+    case "input":
+      return "";
   }
 }

@@ -29,6 +29,7 @@ export type HealthReason =
   | { code: "not_running" }
   | { code: "context_full" }
   | { code: "stalled"; minutes: number }
+  | { code: "input_waiting" }
   | { code: "phase_stale"; phase: string; minutes: number };
 
 export interface Health {
@@ -51,6 +52,7 @@ export function deriveHealth(state: RoomState, agent: Agent, now: number, t: Hea
   else if (pending.length > 0) yellow.push({ code: "approvals_waiting", count: pending.length });
 
   if (agent.process === "exited") yellow.push({ code: "not_running" });
+  if (agent.process === "running" && agent.activity === "awaiting_input") yellow.push({ code: "input_waiting" });
   if (agent.resumability === "context_full") yellow.push({ code: "context_full" });
 
   const waitingGpu = agent.phase?.value === "waiting_gpu";
@@ -83,6 +85,8 @@ export function describeHealthReason(r: HealthReason): string {
       return "not running";
     case "context_full":
       return "context window full";
+    case "input_waiting":
+      return "waiting for input in its terminal";
     case "stalled":
       return `no activity for ${r.minutes} min`;
     case "phase_stale":

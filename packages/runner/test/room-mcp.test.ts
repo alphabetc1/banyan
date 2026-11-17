@@ -48,8 +48,8 @@ async function setup() {
   cleanups.push(() => link.close());
   // W1 gets a real worktree on a real clone so room_commit runs real git.
   const repoDir = join(tempDir("mcp-repo"), "repo");
-  await ensureClone(link.state!.room!.repoUrl, repoDir);
-  const wt = await createWorktree({ repoDir, path: join(tempDir("mcp-wt"), "w1"), baseBranch: "main", roomShort: "t", agentName: "w1" });
+  await ensureClone(link.state!.room!.repoUrl!, repoDir);
+  const wt = await createWorktree({ repoDir, path: join(tempDir("mcp-wt"), "w1"), baseRef: "origin/main", roomShort: "t", agentName: "w1" });
   link.emit([draft("worktree.created", { worktreeId: newId(), agentId: ids.W1, branch: wt.branch, baseSha: wt.baseSha })]);
   await waitFor(() => link.state!.agents[ids.W1]?.worktreeId, "W1 worktree in projection");
   const mcp = new RoomMcp({

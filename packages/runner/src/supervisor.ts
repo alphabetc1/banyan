@@ -2,11 +2,12 @@
 // provider callbacks into room events and room events into agent input.
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { agentGroup, draft, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
 import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
-import type { AgentProvider, AgentSession } from "./providers/types.ts";
+import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
 import { commitAll, createWorktree, ensureClone, pushBranch, worktreeStatus } from "./worktree.ts";
 
@@ -22,7 +23,8 @@ export interface SupervisorOptions {
   roomDir: string;
   store: LocalStore;
   mcp: RoomMcp;
-  providers: Record<Agent["provider"], AgentProvider>;
+  // claudeTerminal runs Claude agents created in terminal mode.
+  providers: Record<Agent["provider"], AgentProvider> & { claudeTerminal?: AgentProvider };
   log: Logger;
   state(): RoomState;
   emit(drafts: EventDraft[], asAgent?: string | null): void;
@@ -37,12 +39,19 @@ interface Running {
   exited: Promise<void>;
   // An exit reported after `ready` resolved but before launch() registered the session.
   earlyExit: { crashed: boolean; detail: string } | null;
-  activity: "working" | "idle" | null;
+  activity: "working" | "idle" | "awaiting_input" | null;
   sessionId: string | null;
+}
+
+// Paths people type often start with ~ for their home directory.
+function expandHome(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 }
 
 export class Supervisor {
   private running = new Map<string, Running>();
+  // Sessions whose provider has not confirmed them yet; a terminal can already need its person.
+  private launching = new Map<string, Running>();
   private starting = new Map<string, Promise<void>>();
   // Approvals this process asked for that are still undecided, including ones not yet
   // echoed by the server.
@@ -52,6 +61,8 @@ export class Supervisor {
   private timers: NodeJS.Timeout[] = [];
   private repoReady: Promise<string> | null = null;
   private closed = false;
+  // Until start() runs, it is the one that brings agents up; live creation events are ignored.
+  private started = false;
 
   constructor(private opts: SupervisorOptions) {}
 
@@ -70,6 +81,7 @@ export class Supervisor {
         .map((a) => a.id),
     );
     for (const r of this.opts.store.unsentApprovalRequests()) stale.add(r.approvalId);
+    this.started = true;
     this.opts.emit([...stale].map((approvalId) => draft("approval.expired", { approvalId, reason: "runner restarted" })));
     // Agents resume in the background, each reporting its own progress, so the runner counts
     // as up once it is connected; close() waits for any that are still starting.
@@ -91,7 +103,7 @@ export class Supervisor {
   onEvents(events: RoomEvent[]): void {
     const state = this.opts.state();
     for (const e of events) {
-      if (e.type === "agent.created" && e.payload.runnerId === this.opts.runnerId) {
+      if (e.type === "agent.created" && e.payload.runnerId === this.opts.runnerId && this.started) {
         void this.ensureRunning(e.payload.agentId);
       } else if (e.type === "message.sent") {
         this.deliverMessage(state, e.payload.messageId);
@@ -111,9 +123,11 @@ export class Supervisor {
     if (!this.repoReady) {
       const room = this.opts.state().room;
       if (!room) throw new Error("room state not loaded");
+      if (!room.repoUrl) throw new Error("this room has no shared repository; give the agent a repository on its runner's machine");
+      const repoUrl = room.repoUrl;
       const repoDir = join(this.opts.roomDir, "repo");
       mkdirSync(this.opts.roomDir, { recursive: true });
-      this.repoReady = ensureClone(room.repoUrl, repoDir).then(() => repoDir);
+      this.repoReady = ensureClone(repoUrl, repoDir).then(() => repoDir);
       this.repoReady.catch(() => {
         this.repoReady = null;
       });
@@ -121,9 +135,10 @@ export class Supervisor {
     return this.repoReady;
   }
 
-  // Workers get their own worktree; leaders and monitors read the shared clone.
+  // Workers get their own worktree, in their local repository if they have one and in the
+  // room's fork otherwise; leaders and monitors read the repository itself.
   private async workingDirectory(agent: Agent): Promise<string> {
-    const repoDir = await this.repo();
+    const repoDir = agent.repoPath ? expandHome(agent.repoPath) : await this.repo();
     if (agent.role !== "worker") return repoDir;
     const known = this.opts.store.worktree(agent.id);
     if (known) return known.path;
@@ -131,13 +146,26 @@ export class Supervisor {
     const wt = await createWorktree({
       repoDir,
       path: join(this.opts.roomDir, "worktrees", agent.id),
-      baseBranch: room.baseBranch,
+      // A local repository starts from whatever is checked out there.
+      baseRef: agent.repoPath ? "HEAD" : `origin/${room.baseBranch}`,
       roomShort: room.id.slice(-6).toLowerCase(),
       agentName: agent.name,
     });
     this.opts.store.saveWorktree({ agentId: agent.id, ...wt });
     this.opts.emit([draft("worktree.created", { worktreeId: newId(), agentId: agent.id, branch: wt.branch, baseSha: wt.baseSha })]);
     return wt.path;
+  }
+
+  private providerFor(agent: Agent): AgentProvider {
+    if (!agent.terminal) return this.opts.providers[agent.provider];
+    const terminal = agent.provider === "claude" ? this.opts.providers.claudeTerminal : undefined;
+    if (!terminal) throw new Error(`terminal mode is not available for ${agent.provider} agents on this runner`);
+    return terminal;
+  }
+
+  // The live terminal of a running terminal-mode agent.
+  terminal(agentId: string): TerminalHandle | null {
+    return (this.running.get(agentId) ?? this.launching.get(agentId))?.session.terminal ?? null;
   }
 
   private ensureRunning(agentId: string): Promise<void> {
@@ -184,7 +212,7 @@ export class Supervisor {
     const exited = new Promise<void>((resolve) => (markExited = resolve));
     const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null };
     this.appendTranscript(agentId, [{ kind: "system", text: resumeSessionId ? "resuming session" : "starting session", ts: Date.now() }]);
-    const provider = this.opts.providers[agent.provider];
+    const provider = this.providerFor(agent);
     run.session = provider.start(
       {
         agentId,
@@ -226,7 +254,12 @@ export class Supervisor {
     );
     // Claude only confirms a session after its first user message, so queue it before waiting.
     run.session.send(firstMessage, "steer");
-    await run.session.ready;
+    this.launching.set(agentId, run);
+    try {
+      await run.session.ready;
+    } finally {
+      this.launching.delete(agentId);
+    }
     run.ready = true;
     if (this.closed) {
       // The runner began shutting down while this session was starting.
@@ -291,7 +324,8 @@ export class Supervisor {
       if (!current || current.headSha !== status.headSha || JSON.stringify(current.diffStat) !== JSON.stringify(status.diffStat)) {
         this.opts.emit([draft("worktree.updated", { worktreeId: agent.worktreeId, headSha: status.headSha, diffStat: status.diffStat })]);
       }
-      await pushBranch(wt.path, wt.branch, wt.baseSha);
+      // Branches in the user's own repository are theirs to push.
+      if (!agent.repoPath) await pushBranch(wt.path, wt.branch, wt.baseSha);
     } catch (e) {
       const detail = (e as Error).message;
       this.opts.log.warn(`agent ${agentId}: worktree sync failed: ${detail}`);
@@ -319,7 +353,7 @@ export class Supervisor {
     } else if (msg.from.kind === "member" && msg.from.id !== target?.memberId) {
       text = `[Message from room member ${state.members[msg.from.id]?.displayName ?? msg.from.id}]\n${msg.text}`;
     }
-    run.session.send(text, msg.delivery);
+    run.session.send(text, msg.delivery, true);
     this.opts.store.markDelivered(messageId);
     // Providers do not echo input back, so the transcript records what the agent was sent.
     this.appendTranscript(msg.toAgentId, [{ kind: "user", text: msg.text, ts: Date.now(), messageId }]);

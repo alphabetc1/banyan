@@ -25,14 +25,17 @@ export interface AppOptions {
   now?: () => number;
 }
 
-const CreateRoomBody = z.object({
-  name: z.string().min(1).max(200),
-  repoUrl: z.string().min(1).max(500),
-  baseBranch: z.string().min(1).max(200),
-  goalTitle: z.string().min(1).max(500),
-  goalDescription: z.string().max(20_000).default(""),
-  ownerName: z.string().min(1).max(100),
-});
+// A room without repoUrl and baseBranch has no shared fork, like a local workspace.
+const CreateRoomBody = z
+  .object({
+    name: z.string().min(1).max(200),
+    repoUrl: z.string().min(1).max(500).nullable().default(null),
+    baseBranch: z.string().min(1).max(200).nullable().default(null),
+    goalTitle: z.string().min(1).max(500),
+    goalDescription: z.string().max(20_000).default(""),
+    ownerName: z.string().min(1).max(100),
+  })
+  .refine((b) => (b.repoUrl === null) === (b.baseBranch === null), { message: "repoUrl and baseBranch go together" });
 const JoinBody = z.object({ inviteToken: z.string().min(1), displayName: z.string().min(1).max(100) });
 const RunnerBody = z.object({ hostname: z.string().min(1).max(200) });
 const RoomParams = z.object({ roomId: z.string().min(1) });

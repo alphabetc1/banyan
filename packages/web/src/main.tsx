@@ -8,6 +8,7 @@ import { useRoute } from "./router.ts";
 import { HomePage } from "./pages/HomePage.tsx";
 import { JoinPage } from "./pages/JoinPage.tsx";
 import { RoomShell } from "./pages/RoomShell.tsx";
+import { adoptLocalWorkspace } from "./desktop.tsx";
 
 function App() {
   const [lang, setLangState] = useState<Language>(detectLanguage);
@@ -42,6 +43,9 @@ function App() {
     </LanguageContext.Provider>
   );
 }
+
+// Inside the desktop client, its local workspace is joined without an invite.
+await adoptLocalWorkspace();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -42,11 +42,12 @@ export interface CreatedWorktree {
 export async function createWorktree(opts: {
   repoDir: string;
   path: string;
-  baseBranch: string;
+  // Commit the new branch starts from, e.g. origin/main or HEAD.
+  baseRef: string;
   roomShort: string;
   agentName: string;
 }): Promise<CreatedWorktree> {
-  const baseSha = await git(opts.repoDir, ["rev-parse", `origin/${opts.baseBranch}`]);
+  const baseSha = await git(opts.repoDir, ["rev-parse", `${opts.baseRef}^{commit}`]);
   const stem = `banyan/${opts.roomShort}/${slug(opts.agentName)}`;
   let branch = stem;
   for (let n = 2; await branchExists(opts.repoDir, branch); n++) branch = `${stem}-${n}`;

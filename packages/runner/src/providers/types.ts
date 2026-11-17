@@ -16,7 +16,7 @@ export interface SessionSpec {
 
 export interface SessionCallbacks {
   onSessionId(id: string): void;
-  onActivity(activity: "working" | "idle"): void;
+  onActivity(activity: "working" | "idle" | "awaiting_input"): void;
   onTranscript(entries: TranscriptEntry[]): void;
   // Resolves when a human decides in the web UI; may stay pending for a long time.
   requestApproval(req: { tool: string; input: string }): Promise<"allowed" | "denied">;
@@ -24,12 +24,25 @@ export interface SessionCallbacks {
   onExit(info: { crashed: boolean; detail: string }): void;
 }
 
+// The live terminal of a session running the provider's own interactive UI.
+export interface TerminalHandle {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  // Recent output for a view that attaches now, and every later chunk until it detaches;
+  // onEnd fires once the terminal's process has exited.
+  attach(listener: (data: string) => void, onEnd?: (detail: string) => void): { backlog: string; detach(): void };
+}
+
 export interface AgentSession {
   // Resolves once the provider confirmed the session (and its id); rejects if it failed to start,
   // e.g. when the session to resume no longer exists.
   readonly ready: Promise<void>;
-  send(text: string, delivery: Delivery): void;
+  // recorded: Banyan has already put this text in the transcript (a room message), so a
+  // provider that reports input itself must not report it again.
+  send(text: string, delivery: Delivery, recorded?: boolean): void;
   stop(): Promise<void>;
+  // Present for sessions that run in a terminal.
+  readonly terminal?: TerminalHandle;
 }
 
 export interface AgentProvider {

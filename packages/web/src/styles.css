@@ -431,12 +431,35 @@ label {
   min-height: 0;
 }
 
+/* Terminal of a terminal-mode agent */
+.terminal-pane {
+  position: relative;
+  min-height: 300px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #1f1e1c;
+  padding: 8px;
+}
+.terminal-host {
+  position: absolute;
+  inset: 8px;
+}
+.terminal-closed {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  color: #a29d93;
+}
+
 /* Agent detail */
 .agent-page {
   display: grid;
   grid-template-columns: 1fr 300px;
   gap: 28px;
   height: 100%;
+}
+.agent-page.no-details {
+  grid-template-columns: 1fr;
 }
 .agent-main {
   display: grid;
@@ -567,6 +590,9 @@ label {
 }
 .dialog {
   width: min(520px, calc(100vw - 32px));
+  /* Long forms scroll inside the dialog instead of running off a short window. */
+  max-height: calc(100vh - 32px);
+  overflow: auto;
   background: var(--surface);
   border-radius: var(--radius);
   border: 1px solid var(--border);

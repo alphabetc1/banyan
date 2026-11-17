@@ -1,7 +1,10 @@
 // Supervisor lifecycle edge cases. A scripted provider controls only *when* a session becomes
 // ready, asks for approval or exits; the server, store, link and Room MCP are all real.
 // Full provider behaviour is covered by providers.e2e.test.ts.
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { newId, type Delivery } from "@banyan/shared";
 import { ServerLink } from "../src/link.ts";
@@ -46,10 +49,12 @@ class ScriptedSession implements AgentSession {
 
 class ScriptedProvider implements AgentProvider {
   sessions: ScriptedSession[] = [];
+  specs: SessionSpec[] = [];
   constructor(private script: Script) {}
-  start(_spec: SessionSpec, cb: SessionCallbacks): AgentSession {
+  start(spec: SessionSpec, cb: SessionCallbacks): AgentSession {
     const s = new ScriptedSession(cb, this.script);
     this.sessions.push(s);
+    this.specs.push(spec);
     return s;
   }
   async close(): Promise<void> {}
@@ -60,11 +65,11 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function setup(script: Script, opts: { createAgent?: boolean; store?: LocalStore; repoUrl?: string } = {}) {
+async function setup(script: Script, opts: { createAgent?: boolean; store?: LocalStore; repoUrl?: string | null } = {}) {
   const server = new TestServer();
   await server.start();
   cleanups.push(() => server.stop());
-  const room = await createRoom(server, opts.repoUrl ?? createFork());
+  const room = await createRoom(server, opts.repoUrl === undefined ? createFork() : opts.repoUrl);
   const groupId = newId();
   const agentId = newId();
   const roomDir = tempDir("supervisor");
@@ -100,7 +105,7 @@ async function setup(script: Script, opts: { createAgent?: boolean; store?: Loca
     store.close();
   });
   const serverState = () => server.state(room.roomId, room.memberToken);
-  return { server, room, agentId, groupId, store, link, log, provider, supervisor, serverState, createAgent };
+  return { server, room, roomDir, agentId, groupId, store, link, log, provider, supervisor, serverState, createAgent };
 }
 
 describe("Supervisor", () => {
@@ -131,6 +136,76 @@ describe("Supervisor", () => {
     const agent = (await t.serverState()).agents[t.agentId]!;
     expect(agent).toMatchObject({ process: "exited", processDetail: "session ended" });
     expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
+  });
+
+  it("works in a worktree of a local repository, from its checked-out commit, without pushing", async () => {
+    // A local repository on a feature branch, with its own remote.
+    const remote = createFork();
+    const repo = join(tempDir("local-repo"), "repo");
+    execFileSync("git", ["clone", "-q", remote, repo]);
+    execFileSync("git", ["checkout", "-q", "-b", "feature"], { cwd: repo });
+    writeFileSync(join(repo, "feature.txt"), "wip\n");
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=me", "-c", "user.email=me@example.com", "commit", "-qm", "wip"], { cwd: repo });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    let turnEnd!: () => void;
+    const t = await setup({ onReady: (cb) => (turnEnd = () => cb.onTurnEnd({ ok: true, error: null })) }, { createAgent: false, repoUrl: null });
+    const workerId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { agentId: workerId, groupId: null, runnerId: t.room.runnerId, name: "local w", role: "worker", provider: "claude", model: "default", goalId: t.room.rootGoalId, instructions: "", repoPath: repo }),
+    ]);
+    await t.supervisor.start();
+    await waitFor(async () => (await t.serverState()).agents[workerId]?.process === "running", "worker running");
+
+    const wt = t.store.worktree(workerId)!;
+    expect(wt).toMatchObject({ path: join(t.roomDir, "worktrees", workerId), baseSha: head, branch: "banyan/" + t.room.roomId.slice(-6).toLowerCase() + "/local-w" });
+    expect(t.provider.specs[0]!.cwd).toBe(wt.path);
+    expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" })).toContain(wt.path);
+    expect(readFileSync(join(wt.path, "feature.txt"), "utf8")).toBe("wip\n");
+
+    // After a turn with a commit, the worktree is reported but the branch stays local.
+    writeFileSync(join(wt.path, "result.txt"), "done\n");
+    execFileSync("git", ["add", "."], { cwd: wt.path });
+    execFileSync("git", ["-c", "user.name=me", "-c", "user.email=me@example.com", "commit", "-qm", "result"], { cwd: wt.path });
+    turnEnd();
+    const state = await waitFor(async () => {
+      const s = await t.serverState();
+      const reported = Object.values(s.worktrees).find((w) => w.agentId === workerId);
+      return reported && reported.diffStat.files === 1 ? s : null;
+    }, "worktree update");
+    expect(Object.values(state.worktrees).find((w) => w.agentId === workerId)!.diffStat).toEqual({ files: 1, insertions: 1, deletions: 0 });
+    expect(execFileSync("git", ["branch", "-a", "--list", "*banyan*"], { cwd: repo, encoding: "utf8" })).not.toContain("remotes/");
+    expect(execFileSync("git", ["ls-remote", "--heads", remote], { encoding: "utf8" })).not.toContain("banyan/");
+    expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
+  });
+
+  it("expands ~ in a local repository path", async () => {
+    const home = mkdtempSync(join(homedir(), ".banyan-test-repo-"));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    execFileSync("git", ["clone", "-q", createFork(), join(home, "repo")]);
+    const t = await setup({}, { createAgent: false, repoUrl: null });
+    const workerId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { agentId: workerId, groupId: null, runnerId: t.room.runnerId, name: "w", role: "worker", provider: "claude", model: "default", goalId: t.room.rootGoalId, instructions: "", repoPath: `~/${basename(home)}/repo` }),
+    ]);
+    await t.supervisor.start();
+    await waitFor(async () => (await t.serverState()).agents[workerId]?.process === "running", "worker running");
+    expect(execFileSync("git", ["worktree", "list"], { cwd: join(home, "repo"), encoding: "utf8" })).toContain(t.store.worktree(workerId)!.path);
+  });
+
+  it("explains that an agent in a room without a fork needs a local repository", async () => {
+    const t = await setup({}, { createAgent: false, repoUrl: null });
+    const workerId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("agent.created", { agentId: workerId, groupId: null, runnerId: t.room.runnerId, name: "w", role: "worker", provider: "claude", model: "default", goalId: t.room.rootGoalId, instructions: "" }),
+    ]);
+    await t.supervisor.start();
+    const agent = await waitFor(async () => {
+      const a = (await t.serverState()).agents[workerId];
+      return a?.process === "crashed" ? a : null;
+    }, "start failure");
+    expect(agent.processDetail).toBe("failed to start: this room has no shared repository; give the agent a repository on its runner's machine");
+    expect(t.log.lines).toEqual([{ level: "error", msg: `agent ${workerId} failed to start: this room has no shared repository; give the agent a repository on its runner's machine` }]);
   });
 
   it("shows the agent as starting while its workspace is prepared", async () => {

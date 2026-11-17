@@ -69,14 +69,14 @@ test("installs this Mac's build with one command, opens it on the server, and up
   const client = await electron.launch({
     executablePath: executable,
     args: ["--lang=en-US", `--server-url=${base}`],
-    env: { ...process.env, BANYAN_DESKTOP_DATA: clientData },
+    env: { ...process.env, BANYAN_DESKTOP_DATA: clientData, BANYAN_LOCAL_PORT: "0" },
   });
   const exited = new Promise<number | null>((resolve) => client.process().once("exit", (code) => resolve(code)));
   try {
     const page = await client.firstWindow();
     await expect(page.getByRole("heading", { name: "Banyan" })).toBeVisible();
     expect(page.url()).toBe(`${base}/`);
-    expect(JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8"))).toEqual({ serverUrl: base, enabledRooms: [] });
+    expect(JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8"))).toMatchObject({ serverUrl: base, lastOpened: "team" });
 
     // Running the command again quits the running copy gracefully and replaces it.
     const second = await install(dest);

@@ -5,7 +5,7 @@
 // pnpm's symlinks. better-sqlite3 ships Node-API prebuilds, which Electron loads as is.
 //   node scripts/build.mjs [--arch x64|arm64]   (default: this machine's architecture)
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -21,15 +21,17 @@ const desktop = readJson(join(root, "package.json"));
 const runner = readJson(join(root, "..", "runner", "package.json"));
 const electronVersion = readJson(join(root, "node_modules", "electron", "package.json")).version;
 
-// better-sqlite3 is native; the Claude SDK finds its bundled claude executable relative to
-// its own install location.
-const EXTERNAL = ["better-sqlite3", "@anthropic-ai/claude-agent-sdk"];
+// better-sqlite3 and node-pty are native; the Claude SDK finds its bundled claude executable
+// relative to its own install location.
+const EXTERNAL = ["better-sqlite3", "@anthropic-ai/claude-agent-sdk", "node-pty"];
+// Optional native speedups ws loads only if installed.
+const OPTIONAL = ["bufferutil", "utf-8-validate"];
 
 // Start clean: native modules and the Claude SDK's executable are per architecture.
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
-const common = { bundle: true, platform: "node", target: "node22", sourcemap: "linked", external: ["electron", ...EXTERNAL], logLevel: "warning" };
+const common = { bundle: true, platform: "node", target: "node22", sourcemap: "linked", external: ["electron", ...EXTERNAL, ...OPTIONAL], logLevel: "warning" };
 await build({
   ...common,
   entryPoints: { main: join(root, "src", "main.ts"), "runner-host": join(root, "src", "runner-host.ts") },
@@ -42,6 +44,9 @@ await build({
 // Sandboxed preload scripts must be CommonJS.
 await build({ ...common, entryPoints: { preload: join(root, "src", "preload.ts") }, outdir: out, format: "cjs", outExtension: { ".js": ".cjs" } });
 copyFileSync(join(root, "src", "setup.html"), join(out, "setup.html"));
+// The web UI the local workspace serves.
+execFileSync("pnpm", ["--filter", "@banyan/web", "build"], { cwd: root, stdio: "inherit" });
+cpSync(join(root, "..", "web", "dist"), join(out, "web"), { recursive: true });
 
 const appManifest = {
   name: "banyan-desktop",

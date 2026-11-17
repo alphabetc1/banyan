@@ -18,8 +18,8 @@ async function setup() {
 describe("worktrees", () => {
   it("creates worktrees on new branches and suffixes colliding names instead of reusing them", async () => {
     const { roomDir, repoDir } = await setup();
-    const a = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseBranch: "main", roomShort: "abc123", agentName: "Prefill Worker" });
-    const b = await createWorktree({ repoDir, path: join(roomDir, "wt", "b"), baseBranch: "main", roomShort: "abc123", agentName: "Prefill Worker" });
+    const a = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseRef: "origin/main", roomShort: "abc123", agentName: "Prefill Worker" });
+    const b = await createWorktree({ repoDir, path: join(roomDir, "wt", "b"), baseRef: "origin/main", roomShort: "abc123", agentName: "Prefill Worker" });
     expect(a.branch).toBe("banyan/abc123/prefill-worker");
     expect(b.branch).toBe("banyan/abc123/prefill-worker-2");
     expect(a.baseSha).toBe(await git(repoDir, ["rev-parse", "origin/main"]));
@@ -34,7 +34,7 @@ describe("worktrees", () => {
 
   it("reports committed, modified and untracked changes without touching the index", async () => {
     const { roomDir, repoDir } = await setup();
-    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseBranch: "main", roomShort: "r", agentName: "w" });
+    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseRef: "origin/main", roomShort: "r", agentName: "w" });
     writeFileSync(join(wt.path, "README.md"), "seed\nline two\n");
     execFileSync("git", ["add", "README.md"], { cwd: wt.path, stdio: "pipe" });
     execFileSync("git", [...COMMIT, "-m", "edit readme"], { cwd: wt.path, stdio: "pipe" });
@@ -52,7 +52,7 @@ describe("worktrees", () => {
 
   it("commits all changes under the agent's identity, or reports nothing to commit", async () => {
     const { roomDir, repoDir } = await setup();
-    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseBranch: "main", roomShort: "r", agentName: "Tok Worker" });
+    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseRef: "origin/main", roomShort: "r", agentName: "Tok Worker" });
     expect(await commitAll(wt.path, "Tok Worker", "empty")).toBeNull();
     writeFileSync(join(wt.path, "a.txt"), "a\n");
     writeFileSync(join(wt.path, "README.md"), "changed\n");
@@ -64,7 +64,7 @@ describe("worktrees", () => {
 
   it("pushes the branch to the fork only when it has new commits", async () => {
     const { fork, roomDir, repoDir } = await setup();
-    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseBranch: "main", roomShort: "r", agentName: "w" });
+    const wt = await createWorktree({ repoDir, path: join(roomDir, "wt", "a"), baseRef: "origin/main", roomShort: "r", agentName: "w" });
     expect(await pushBranch(wt.path, wt.branch, wt.baseSha)).toBe("nothing_to_push");
     writeFileSync(join(wt.path, "x.txt"), "x\n");
     execFileSync("git", ["add", "x.txt"], { cwd: wt.path, stdio: "pipe" });

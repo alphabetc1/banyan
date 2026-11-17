@@ -420,3 +420,37 @@ Rhett 确认的决定：
 - **总览**：左侧是 agent 列表，独立 agent 排在最前，然后按 group 分组（标出 group 所在的目标）。每行显示状态灯、角色、provider、阶段、活动和待审批数；有待处理项时，列表顶部显示收件箱。右侧是选中 agent 的对话和详情，没有选中时显示列表里的第一个 agent。goal 树和卡片墙移到导航里的「目标」页。
 - **导航**：点「Banyan」回到当前 room 的总览；切换到其他 room、新建或加入 room，都通过顶栏的 room 下拉菜单。
 
+## 23. 本地优先、像 Orca 一样（2026-11-17）
+
+Rhett 确认的方向：界面和用法像 Orca。默认打开就是本地工作区，不需要 room；右侧是真正的 Claude Code 终端，原生功能（skills、斜杠命令、/model、plan mode、状态栏、交互式审批）一个不少。room 是附加功能，不是必需品。这一节推翻了第 1 节"不渲染终端"的决定，但只针对 Claude。
+
+**本地工作区**
+- 客户端内置一个 room server，只监听 `127.0.0.1`，端口固定（默认 7710，可以用 `BANYAN_LOCAL_PORT` 修改）。端口固定是因为 web 的登录凭证存在 localStorage 里，按 origin 隔离，换端口就丢了。数据放在客户端的 userData 目录。web 构建产物打包进客户端，由这个内置 server 提供。
+- 第一次启动时，客户端自动创建一个名为「本地」的工作区（技术上就是一个 room），并自动注册、启动本机 runner。打开窗口直接进入这个工作区，不需要填任何东西。
+- 本地工作区的 room 没有 fork：`room.created` 的 `repoUrl` 可以为空。新建 agent 时选一个本机已有的仓库目录（`agent.created.repoPath`），runner 以这个仓库当前的 HEAD 为起点，在 `<roomDir>/worktrees/<agentId>` 开一个 worktree 和新分支。这类 agent 的分支**不会自动 push**，因为它们属于用户自己的仓库，远端由用户管理。在团队 room 里也可以给 agent 指定本机仓库。
+- 团队 room 照旧，是另外连接的 server。顶栏的 room 下拉菜单里可以在「本地」和已连接的团队 room 之间切换。
+
+**Claude 终端模式**
+- runner 用 node-pty 运行真正的交互式 `claude`，界面用 xterm.js 渲染。终端数据经 runner 所在的 utility process → 主进程 → 窗口传输（Electron MessagePort）；runner 为每个终端保留一段输出缓存，重新打开时可以回放。
+- 启动参数：`--settings '<json>'` 注入 HTTP hooks（指向 runner 本地的接口，路径里带上 agent 身份和随机密钥），`--mcp-config` 注入 Room MCP，`--append-system-prompt` 传入 Banyan 的协作说明，恢复时用 `--resume <session_id>`。用户自己的 settings、CLAUDE.md、plugins、skills、hooks 照常加载（已实测：注入的 hooks 和用户 hooks 合并执行）。
+- 去掉父进程是 Claude Code 时留下的环境变量（`CLAUDECODE`、`CLAUDE_CODE_CHILD_SESSION`、`CLAUDE_CODE_SESSION_*` 等），否则 Claude 不保存会话，也就无法恢复（已实测）。
+- 状态来自 hooks：`UserPromptSubmit` → 工作中；`PermissionRequest` 或 `Notification(permission_prompt)` → 等待审批（进入「需要处理」，提示在终端里处理）；之后出现 `PreToolUse`、`PostToolUse`、`Stop` 或 `UserPromptSubmit` 时清除等待状态；`Stop` → 空闲。每个事件都带 `session_id`，用来绑定会话。审批在终端里完成，UI 上没有审批卡片。
+- 对话记录：只用文档里明确列出的 hook 字段（用户输入、工具调用和结果、每轮最后一条回复）生成，供 room 里的其他人只读查看。Claude 内部的 transcript JSONL 格式官方说明会随版本变化，所以不解析它。
+- room 里的消息（leader 或别人发给它的）会直接输入到终端：fyi 直接输入，Claude Code 会自己排队处理；steer 先按 Esc 打断当前操作，再输入。
+- 「是否信任此文件夹」对话框默认选中「No, exit」，但信任关系会从父目录继承；第一次在新位置使用时由用户在终端里确认，不替用户自动接受。
+- 退出客户端时终端随之结束，下次启动用 `claude --resume` 恢复会话。
+- Codex 暂时保持托管模式（SDK + 结构化对话），因为它没有足够的 hooks 来跟踪状态和审批（Rhett 确认）。
+- 远程 agent（room 里跑在别人机器上的）只显示只读的对话记录；终端只在运行这个 agent 的那台机器上可用（Rhett 确认）。
+
+**实现中实测到的细节**（Claude Code 2.1.322）
+- hook 的实际字段：`UserPromptSubmit` 的用户输入在 `prompt` 字段里；`PostToolUse` 的结果在 `tool_response` 字段里（是一个对象）。这两处和文档 agent 转述的不一致，以实测为准。`SessionStart` 不会以 HTTP hook 的形式送达，不过用不到它，因为每个事件都带 `session_id`。
+- `--settings` 可以直接传 JSON 字符串，注入的 hooks 会和用户自己的 hooks 合并执行。`--mcp-config` 也可以直接传 JSON 字符串。
+- 第一条消息作为命令行参数传入（`claude ... "<prompt>"`）；新会话用 `--session-id <uuid>` 预先指定会话 id；恢复时用 `--resume <id> "<prompt>"`，上下文会保留。
+- 默认的权限模式下，Room MCP 的工具也会弹审批，所以注入的设置里加了 `permissions.allow: ["mcp__room"]`，和托管模式下自动放行 room 工具的做法保持一致。
+- 「是否信任此文件夹」对话框出现时不会触发任何 hook，所以在屏幕上识别这段文字（去掉转义序列和空白后再匹配）。会话还没有被确认启动之前，终端就已经可以打开，方便用户回答这个问题。
+- 只有 supervisor 已经写进 transcript 的 room 消息（带 `messageId`）才会忽略对应 hook 的重复记录（`send(text, delivery, recorded)`）；启动提示、唤醒 leader 的消息等都由 hook 记录。
+- node-pty 预编译包里的 `spawn-helper` 安装后没有执行权限，runner 在第一次 spawn 前会补上。
+- 终端 agent 的详情面板默认收起，让终端占满宽度，需要时点「详情」展开。
+
+**实现顺序**：1. 本地工作区（内置 server、可以选本机仓库的 agent）；2. Claude 终端模式；3. 本地和 room 之间的切换、打磨。三步都已完成。
+

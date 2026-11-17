@@ -1,6 +1,6 @@
 # Banyan 桌面客户端
 
-Electron 桌面壳 + 内置 runner。窗口显示 room server 的 web UI；在某个 room 里打开「在本机运行 agent」后，客户端会在本机为这个 room 注册并运行 runner。设计见 `docs/design.md` 第 20 节。
+像 Orca 一样在本机并行运行多个 Claude Code / Codex agent：左边是 agent 列表，能看到每个 agent 的状态；右边是选中 agent 的真实 Claude Code 终端，skills、斜杠命令、/model 等原生功能都能用。不需要任何 server，打开就能用。团队 room 是附加功能：连上团队的 room server，就能和同事共享方向和结论。设计见 `docs/design.md` 第 20～23 节。
 
 ## 开发
 
@@ -28,13 +28,16 @@ curl -fsSL <server>/install.sh | bash -s <server>
 
 ## 使用
 
-1. 用上面那行命令安装的，会直接连到对应的 server。手动安装的，首次启动时要填写 room server 地址（见 `deploy/macos/README.md`）。托盘菜单里随时可以更换。
-2. 进入 room 后，点顶栏的「在本机运行 agent」。第一次点击会为这台机器注册 runner，凭证保存在 `~/.banyan/rooms/<roomId>/runner.json`。
-3. 关窗口只是隐藏到托盘，agent 继续运行；从托盘选「退出」才会优雅停止本机 agent。下次启动时会自动拉起，并恢复之前的 agent 会话，之前的历史全部可见。
-4. 如果 runner 崩溃，它不会自动重启。顶栏会显示「本机 runner 出错已停止」，以及原因和日志路径，它的 agent 进程也会被一并结束。点「重新启动」或者重开客户端，agent 会接着原来的会话继续。
-5. 自己的 agent 需要审批、出现异常，或者有发现等待人工审核时，会弹系统通知。
+1. 打开客户端，直接进入「本地」工作区。本机 runner 会自动启动，不用填任何地址。
+2. 点「新建 agent」，填写或点「选择…」选一个本机的 git 仓库，起个名字。Claude agent 默认勾选「在 Claude Code 自己的终端里运行」。每个 agent 会在这个仓库上开一个独立的 worktree 和分支（`banyan/…`），从仓库当前检出的提交开始；分支不会自动 push，push 由你自己决定。
+3. 在左边选中 agent，右边就是它的 Claude Code 终端，可以直接打字、用斜杠命令、在终端里处理审批。它在等你（审批、信任文件夹之类的问题）时，左边会标出「在终端里等你处理」，并弹系统通知。
+4. 需要团队协作时，在顶栏的 room 下拉菜单里选「团队 room server…」，连接团队的 server（地址见 `deploy/macos/README.md`）。之后同一个下拉菜单可以在「本地工作区」和团队 room 之间切换。在团队 room 里点「在本机运行 agent」，就能用这台机器承担你的 agent。
+5. 关窗口只是隐藏到托盘，agent 继续运行；从托盘选「退出」会优雅停止本机 agent。下次启动时会自动拉起，终端 agent 用 `claude --resume` 接着原来的会话，之前的历史全部可见。
+6. 如果 runner 崩溃，它不会自动重启。顶栏会显示「本机 runner 出错已停止」，以及原因和日志路径，它的 agent 进程（包括正在运行的工具命令）也会被一并结束。点「重新启动」或者重开客户端，agent 会接着原来的会话继续。
 
-agent 用的是本机已经登录好的 `claude`（SDK 自带可执行文件，沿用本机的登录状态）、`codex` 和 git 凭证。客户端启动时会从登录 shell 读取 PATH，所以从 Dock 启动也能找到它们。
+本地工作区的数据在客户端的数据目录里（macOS：`~/Library/Application Support/Banyan/local.sqlite`），内置 server 只监听 `127.0.0.1:7710`（可以用 `BANYAN_LOCAL_PORT` 修改）。
+
+终端模式的 Claude agent 运行的是你本机安装的 `claude`，会加载你全部的 Claude Code 配置（settings、CLAUDE.md、plugins、skills、hooks）。托管模式的 Claude agent 用 SDK 自带的可执行文件，同样沿用本机的登录状态和配置。Codex agent 用本机的 `codex`。git 凭证也用本机的。客户端启动时会从登录 shell 读取 PATH，所以从 Dock 启动也能找到它们。
 
 同一个 room 在一台机器上只能有一个 runner。如果已经用 `deploy/macos/banyan.sh install-runner` 装过这个 room 的 runner，先执行 `uninstall-runner`，否则客户端会显示「本机 runner 出错」，并给出占用锁的 pid。
 

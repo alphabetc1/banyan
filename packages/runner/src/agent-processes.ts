@@ -5,6 +5,7 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { agentEnv } from "./agent-env.ts";
 
 interface Recorded {
   pid: number;
@@ -43,12 +44,18 @@ function commandOf(pid: number): string | null {
 export class AgentProcesses {
   constructor(private readonly roomDir: string) {}
 
+  // For processes started elsewhere as the leader of their own process group, such as a
+  // terminal's; call the returned function once the process has exited.
+  record(pid: number, command: string, firstArg: string): () => void {
+    write(this.roomDir, [...read(this.roomDir), { pid, signature: `${basename(command)} ${firstArg}`.trim() }]);
+    return () => write(this.roomDir, read(this.roomDir).filter((r) => r.pid !== pid));
+  }
+
   spawn(command: string, args: string[], opts: Pick<SpawnOptions, "cwd" | "env" | "signal"> = {}): ChildProcessWithoutNullStreams {
-    const child = spawn(command, args, { ...opts, stdio: "pipe", detached: true });
-    const pid = child.pid;
-    if (pid !== undefined) {
-      write(this.roomDir, [...read(this.roomDir), { pid, signature: `${basename(command)} ${args[0] ?? ""}`.trim() }]);
-      child.once("exit", () => write(this.roomDir, read(this.roomDir).filter((r) => r.pid !== pid)));
+    const child = spawn(command, args, { ...opts, env: agentEnv(opts.env ?? process.env), stdio: "pipe", detached: true });
+    if (child.pid !== undefined) {
+      const forget = this.record(child.pid, command, args[0] ?? "");
+      child.once("exit", forget);
     }
     return child;
   }

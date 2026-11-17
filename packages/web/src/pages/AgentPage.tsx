@@ -5,6 +5,8 @@ import { agentGroup, draft, goalPath, newId, type Delivery, type RoomEvent, type
 import { fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "../api.ts";
 import { StatusDot, timeAgo, useAction, useNow } from "../components/common.tsx";
 import { useRoomStore } from "../contexts.ts";
+import { TerminalView } from "../components/terminal.tsx";
+import { useLocalRunnerIds } from "../desktop.tsx";
 import { actorName, agentStatus } from "../derive.ts";
 import { LanguageContext, useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
@@ -224,73 +226,94 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const store = useRoomStore();
   useRoomVersion(store);
   const now = useNow();
+  const localRunnerIds = useLocalRunnerIds();
+  // null until the person toggles it: then the details follow the default for the agent.
+  const [detailsOpen, setDetailsOpen] = useState<boolean | null>(null);
   const state = store.state!;
   const agent = state.agents[agentId];
   if (!agent) return <div className="panel">{t("agent.notFound")}</div>;
+  // A terminal agent on this machine is used through its terminal; elsewhere its transcript
+  // is shown read-only, and messages are typed into its terminal for it.
+  const localTerminal = agent.terminal && localRunnerIds.includes(agent.runnerId);
+  // The terminal gets the full width unless the person opens the details.
+  const showDetails = detailsOpen ?? !localTerminal;
   const status = agentStatus(state, agent, store.onlineRunnerIds, now);
   const runner = state.runners[agent.runnerId];
   const wt = agent.worktreeId ? state.worktrees[agent.worktreeId] : undefined;
 
   return (
-    <div className="agent-page">
+    <div className={`agent-page ${showDetails ? "" : "no-details"}`}>
       <div className="agent-main">
         <div className="row">
           <StatusDot level={status.level} />
           <h2>{agent.name}</h2>
           <span className="pill">{t(`agent.${agent.role}`)}</span>
+          {agent.terminal && <span className="pill">{t("agent.inTerminal")}</span>}
           {status.reasons.length > 0 && <span className="faint">{status.reasons.map(reasonText).join(" · ")}</span>}
+          <span style={{ flex: 1 }} />
+          <button className="ghost" aria-pressed={showDetails} onClick={() => setDetailsOpen(!showDetails)}>
+            {t("agent.details")}
+          </button>
         </div>
-        <Transcript agentId={agentId} />
-        <div className="stack" style={{ gap: 10 }}>
-          <PendingMessages agentId={agentId} />
-          <Approvals agentId={agentId} />
-          <Composer agentId={agentId} />
-        </div>
+        {localTerminal ? (
+          <TerminalView roomId={store.roomId} agentId={agentId} sessionKey={`${agent.providerSessionId}:${agent.process}`} />
+        ) : (
+          <>
+            <Transcript agentId={agentId} />
+            <div className="stack" style={{ gap: 10 }}>
+              <PendingMessages agentId={agentId} />
+              <Approvals agentId={agentId} />
+              <Composer agentId={agentId} />
+            </div>
+          </>
+        )}
       </div>
-      <aside className="panel">
-        <dl className="facts">
-          <dt>{t("agent.goal")}</dt>
-          <dd>{goalPath(state, agent.goalId).map((g) => g.title).join(" → ")}</dd>
-          <dt>{t("agent.group")}</dt>
-          <dd>{agentGroup(state, agent)?.name ?? t("agent.standalone")}</dd>
-          <dt>{t("agent.provider")}</dt>
-          <dd>
-            {agent.provider} · {agent.model}
-          </dd>
-          <dt>{t("agent.owner")}</dt>
-          <dd>{state.members[agent.memberId]?.displayName}</dd>
-          <dt>{t("agent.runner")}</dt>
-          <dd>
-            {runner?.hostname} {!store.onlineRunnerIds.includes(agent.runnerId) && <span className="pill">{t("agent.runnerOffline")}</span>}
-          </dd>
-          <dt>{t("agent.process")}</dt>
-          <dd>
-            {agent.process}
-            {agent.processDetail ? ` (${agent.processDetail})` : ""}
-          </dd>
-          <dt>{t("agent.activity")}</dt>
-          <dd>
-            {t(`activity.${agent.activity}`)} · {timeAgo(agent.lastEventAt, now, lang)}
-          </dd>
-          <dt>{t("agent.phase")}</dt>
-          <dd>
-            {agent.phase ? `${agent.phase.value}${agent.phase.note ? ` — ${agent.phase.note}` : ""}` : t("agent.noPhase")}
-          </dd>
-          {wt && (
-            <>
-              <dt>{t("agent.branch")}</dt>
-              <dd>
-                <code>{wt.branch}</code> · +{wt.diffStat.insertions} −{wt.diffStat.deletions}
-              </dd>
-            </>
-          )}
-          <dt>{t("agent.session")}</dt>
-          <dd>
-            {agent.resumability}
-            {agent.resumabilityDetail ? ` (${agent.resumabilityDetail})` : ""}
-          </dd>
-        </dl>
-      </aside>
+      {showDetails && (
+        <aside className="panel">
+          <dl className="facts">
+            <dt>{t("agent.goal")}</dt>
+            <dd>{goalPath(state, agent.goalId).map((g) => g.title).join(" → ")}</dd>
+            <dt>{t("agent.group")}</dt>
+            <dd>{agentGroup(state, agent)?.name ?? t("agent.standalone")}</dd>
+            <dt>{t("agent.provider")}</dt>
+            <dd>
+              {agent.provider} · {agent.model}
+            </dd>
+            <dt>{t("agent.owner")}</dt>
+            <dd>{state.members[agent.memberId]?.displayName}</dd>
+            <dt>{t("agent.runner")}</dt>
+            <dd>
+              {runner?.hostname} {!store.onlineRunnerIds.includes(agent.runnerId) && <span className="pill">{t("agent.runnerOffline")}</span>}
+            </dd>
+            <dt>{t("agent.process")}</dt>
+            <dd>
+              {agent.process}
+              {agent.processDetail ? ` (${agent.processDetail})` : ""}
+            </dd>
+            <dt>{t("agent.activity")}</dt>
+            <dd>
+              {t(`activity.${agent.activity}`)} · {timeAgo(agent.lastEventAt, now, lang)}
+            </dd>
+            <dt>{t("agent.phase")}</dt>
+            <dd>
+              {agent.phase ? `${agent.phase.value}${agent.phase.note ? ` — ${agent.phase.note}` : ""}` : t("agent.noPhase")}
+            </dd>
+            {wt && (
+              <>
+                <dt>{t("agent.branch")}</dt>
+                <dd>
+                  <code>{wt.branch}</code> · +{wt.diffStat.insertions} −{wt.diffStat.deletions}
+                </dd>
+              </>
+            )}
+            <dt>{t("agent.session")}</dt>
+            <dd>
+              {agent.resumability}
+              {agent.resumabilityDetail ? ` (${agent.resumabilityDetail})` : ""}
+            </dd>
+          </dl>
+        </aside>
+      )}
     </div>
   );
 }

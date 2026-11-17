@@ -3,10 +3,10 @@
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import { killLeftoverAgentProcesses } from "@banyan/runner/agent-processes";
-import { roomDir } from "@banyan/runner/registration";
+import { readSavedRunner, roomDir } from "@banyan/runner/registration";
 import type { LocalRunnerState, LocalRunnerStatus } from "@banyan/shared";
-import { utilityProcess, type UtilityProcess } from "electron";
-import type { HostMessage, MainMessage } from "./host-protocol.ts";
+import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
+import type { HostMessage, MainMessage, TerminalPortMessage } from "./host-protocol.ts";
 
 // Longer than the runner's own outbox drain so a graceful stop is not cut short.
 const STOP_TIMEOUT_MS = 15_000;
@@ -41,7 +41,8 @@ export class RunnerManager {
     if (existing && existing.status.state !== "error") return;
     existing?.log.end();
     const logPath = join(this.opts.logDir, `runner-${roomId}.log`);
-    const h: Hosted = { proc: null, status: { roomId, state: "starting" }, log: createWriteStream(logPath, { flags: "a" }), logPath, stopping: false };
+    const runnerId = readSavedRunner(roomId)?.runnerId ?? null;
+    const h: Hosted = { proc: null, status: { roomId, runnerId, state: "starting" }, log: createWriteStream(logPath, { flags: "a" }), logPath, stopping: false };
     this.hosted.set(roomId, h);
     this.spawn(h);
   }
@@ -61,6 +62,17 @@ export class RunnerManager {
     h.log.end();
     this.hosted.delete(roomId);
     this.changed();
+  }
+
+  // Hands a page's port to the runner hosting the room, which streams the agent's terminal.
+  openTerminal(roomId: string, agentId: string, port: MessagePortMain): void {
+    const proc = this.hosted.get(roomId)?.proc;
+    if (!proc) {
+      port.postMessage({ type: "closed", reason: "this machine's runner for the room is not running" } satisfies TerminalPortMessage);
+      port.close();
+      return;
+    }
+    proc.postMessage({ type: "terminal", agentId } satisfies MainMessage, [port]);
   }
 
   async stopAll(): Promise<void> {
@@ -88,7 +100,7 @@ export class RunnerManager {
   }
 
   private setState(h: Hosted, state: LocalRunnerState, error?: string): void {
-    h.status = { roomId: h.status.roomId, state, ...(error ? { error } : {}) };
+    h.status = { roomId: h.status.roomId, runnerId: h.status.runnerId, state, ...(error ? { error } : {}) };
     this.changed();
   }
 

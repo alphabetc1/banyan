@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { InviteDialog } from "../components/dialogs.tsx";
 import { Preferences } from "../components/common.tsx";
 import { RoomContext } from "../contexts.ts";
-import { LocalRunnerControl, useAttentionNotifications } from "../desktop.tsx";
+import { inDesktopClient, LocalRunnerControl, openLocalWorkspace, openTeamServer, useAttentionNotifications } from "../desktop.tsx";
 import { useT, type MessageKey } from "../i18n.ts";
 import { RoomStore, useRoomVersion } from "../room-store.ts";
 import { linkProps, navigate, routePath, type Route } from "../router.ts";
@@ -106,18 +106,21 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
 }
 
 // Switches to another room joined on this device, or goes to the page for creating or
-// joining one.
+// joining one. In the desktop client it also switches between the local workspace and the
+// team server.
+const LOCAL = "desktop:local";
+const TEAM = "desktop:team";
+
 function RoomSwitcher({ roomId, roomName }: { roomId: string; roomName: string }) {
   const t = useT();
   const others = savedRooms().filter((r) => r.roomId !== roomId);
+  const choose = (value: string) => {
+    if (value === LOCAL) openLocalWorkspace();
+    else if (value === TEAM) openTeamServer();
+    else navigate(value === "" ? "/" : `/rooms/${value}`);
+  };
   return (
-    <select
-      className="room-switcher"
-      aria-label={t("top.room")}
-      value={roomId}
-      onChange={(e) => navigate(e.target.value === "" ? "/" : `/rooms/${e.target.value}`)}
-      style={{ width: "auto" }}
-    >
+    <select className="room-switcher" aria-label={t("top.room")} value={roomId} onChange={(e) => choose(e.target.value)} style={{ width: "auto" }}>
       <option value={roomId}>{roomName}</option>
       {others.map((r) => (
         <option key={r.roomId} value={r.roomId}>
@@ -125,6 +128,8 @@ function RoomSwitcher({ roomId, roomName }: { roomId: string; roomName: string }
         </option>
       ))}
       <option value="">{t("top.otherRooms")}</option>
+      {inDesktopClient && <option value={LOCAL}>{t("top.localWorkspace")}</option>}
+      {inDesktopClient && <option value={TEAM}>{t("top.teamServer")}</option>}
     </select>
   );
 }

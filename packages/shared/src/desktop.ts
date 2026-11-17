@@ -7,8 +7,17 @@ export type LocalRunnerState = "starting" | "running" | "error";
 
 export interface LocalRunnerStatus {
   roomId: string;
+  // The runner's id in the room, so a page can tell which agents run on this machine.
+  runnerId: string | null;
   state: LocalRunnerState;
   error?: string;
+}
+
+// A page's connection to the terminal of an agent running on this machine.
+export interface TerminalConnection {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
 }
 
 export interface DesktopBridge {
@@ -19,6 +28,18 @@ export interface DesktopBridge {
   disableRunner(roomId: string): Promise<void>;
   onRunnersChanged(listener: (runners: LocalRunnerStatus[]) => void): () => void;
   setServerUrl(url: string): Promise<void>;
+  // Credentials of the client's own local workspace; only given to pages it serves itself.
+  localWorkspace(): Promise<{ roomId: string; roomName: string; memberId: string; memberToken: string } | null>;
+  // Lets the person pick a git repository on this machine; resolves to its top-level path, or
+  // null when cancelled. Rejects when the folder is not inside a git repository.
+  pickRepository(): Promise<string | null>;
+  openLocalWorkspace(): void;
+  // Connects to the terminal of a terminal-mode agent hosted by this machine's runner for the
+  // room. onData first receives recent output, then every new chunk; onClose fires when the
+  // terminal is not available or goes away.
+  openTerminal(roomId: string, agentId: string, onData: (data: string) => void, onClose: (reason: string) => void): TerminalConnection;
+  // Shows the page for connecting to a team room server.
+  openTeamServer(): void;
   // Shows a system notification; clicking it brings the window to the given in-app path.
   notify(title: string, body: string, path: string): void;
 }

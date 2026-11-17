@@ -18,8 +18,9 @@ import type {
 export interface Room {
   id: string;
   name: string;
-  repoUrl: string;
-  baseBranch: string;
+  // Both null when the room has no shared fork.
+  repoUrl: string | null;
+  baseBranch: string | null;
   rootGoalId: string;
   createdAt: number;
 }
@@ -71,6 +72,10 @@ export interface Agent {
   model: string;
   goalId: string;
   instructions: string;
+  // A repository on the runner's machine, used instead of the room's fork.
+  repoPath: string | null;
+  // Runs in the provider's own terminal UI; see agent.created.
+  terminal: boolean;
   providerSessionId: string | null;
   process: ProcessState;
   processDetail: string | null;
@@ -221,6 +226,8 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         model: p.model,
         goalId: p.goalId,
         instructions: p.instructions,
+        repoPath: p.repoPath ?? null,
+        terminal: p.terminal ?? false,
         providerSessionId: null,
         process: "unknown",
         processDetail: null,

@@ -73,15 +73,18 @@ export function groupAgents(state: RoomState, groupId: string): Agent[] {
 export type AttentionItem =
   | { kind: "approval"; approvalId: string; agentId: string; tool: string; since: number }
   | { kind: "unhealthy"; agentId: string; reasons: StatusReason[] }
-  | { kind: "review"; postId: string; agentId: string; summary: string };
+  | { kind: "review"; postId: string; agentId: string; summary: string }
+  | { kind: "input"; agentId: string };
 
-// What needs a human: pending approvals, red agents, and posts no agent can review.
+// What needs a human: pending approvals, terminal agents waiting for input, red agents, and
+// posts no agent can review.
 export function attentionItems(state: RoomState, onlineRunnerIds: string[], now: number): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const a of Object.values(state.approvals)) {
     if (a.state === "pending") items.push({ kind: "approval", approvalId: a.id, agentId: a.agentId, tool: a.tool, since: a.requestedAt });
   }
   for (const agent of Object.values(state.agents)) {
+    if (agent.process === "running" && agent.activity === "awaiting_input") items.push({ kind: "input", agentId: agent.id });
     const status = agentStatus(state, agent, onlineRunnerIds, now);
     if (status.level === "red") items.push({ kind: "unhealthy", agentId: agent.id, reasons: status.reasons });
   }
@@ -99,6 +102,8 @@ export function attentionKey(item: AttentionItem): string {
       return `unhealthy:${item.agentId}`;
     case "review":
       return `review:${item.postId}`;
+    case "input":
+      return `input:${item.agentId}`;
   }
 }
 

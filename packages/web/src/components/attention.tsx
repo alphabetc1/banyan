@@ -22,7 +22,7 @@ export function AttentionInbox({ items, state }: { items: AttentionItem[]; state
       {items.map((item) => {
         const agent = state.agents[item.agentId];
         const href = item.kind === "review" ? `/rooms/${store.roomId}/findings` : `/rooms/${store.roomId}/agents/${item.agentId}`;
-        const key = item.kind === "approval" ? item.approvalId : item.kind === "review" ? item.postId : `u-${item.agentId}`;
+        const key = item.kind === "approval" ? item.approvalId : item.kind === "review" ? item.postId : `${item.kind}-${item.agentId}`;
         return (
           <a key={key} className="inbox-item" {...linkProps(href)}>
             <strong>{agent?.name}</strong>{" "}
@@ -32,6 +32,7 @@ export function AttentionInbox({ items, state }: { items: AttentionItem[]; state
               </span>
             )}
             {item.kind === "unhealthy" && <span className="muted">{item.reasons.map(reasonText).join(" · ")}</span>}
+            {item.kind === "input" && <span className="muted">{t("activity.awaiting_input")}</span>}
             {item.kind === "review" && (
               <span className="muted">
                 {t("findings.pending")}: {item.summary}

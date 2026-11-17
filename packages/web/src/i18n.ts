@@ -24,6 +24,8 @@ const en = {
   "top.invite": "Invite",
   "top.room": "Room",
   "top.otherRooms": "Create or join a room…",
+  "top.localWorkspace": "Local workspace",
+  "top.teamServer": "Team room server…",
   "top.offline": "Disconnected from the room server — reconnecting…",
   "top.language": "中文",
   "theme.system": "System theme",
@@ -54,6 +56,10 @@ const en = {
   "agent.send": "Send",
   "agent.pending": "waiting for its runner",
   "agent.interrupt": "interrupt",
+  "agent.terminalClosed": "Terminal closed",
+  "agent.inTerminal": "Claude Code terminal",
+  "agent.details": "Details",
+  "dialog.terminal": "Run in Claude Code's own terminal (skills, slash commands, everything native)",
   "agent.steer": "Interrupt (steer)",
   "agent.fyi": "After this turn (fyi)",
   "agent.messagePlaceholder": "Message this agent…",
@@ -72,6 +78,7 @@ const en = {
   "activity.working": "working",
   "activity.idle": "idle",
   "activity.unknown": "unknown",
+  "activity.awaiting_input": "waiting for you in its terminal",
   "process.starting": "preparing workspace",
   "worktrees.title": "What each agent is exploring",
   "worktrees.empty": "No worktrees yet.",
@@ -103,6 +110,9 @@ const en = {
   "dialog.instructions": "Instructions",
   "dialog.agentGoal": "Agent goal",
   "dialog.noGroup": "None — standalone agent",
+  "dialog.repoPath": "Repository on the runner's machine",
+  "dialog.repoPathOptional": "Repository on the runner's machine (empty: the room's fork)",
+  "dialog.pickRepo": "Choose…",
   "invite.title": "Invite people",
   "invite.link": "Share this link (valid for 7 days):",
   "invite.desktop": "Install the desktop client on a Mac (Intel or Apple Silicon) — paste into Terminal:",
@@ -118,6 +128,7 @@ const en = {
   "desktop.notify.approval": "needs approval",
   "desktop.notify.unhealthy": "needs attention",
   "desktop.notify.review": "has a finding waiting for review",
+  "desktop.notify.input": "is waiting for you in its terminal",
   "error.generic": "Something went wrong",
 } as const;
 
@@ -145,6 +156,8 @@ const zh: Record<MessageKey, string> = {
   "top.invite": "邀请",
   "top.room": "Room",
   "top.otherRooms": "新建或加入 room…",
+  "top.localWorkspace": "本地工作区",
+  "top.teamServer": "团队 room server…",
   "top.offline": "与 room server 断开，正在重连…",
   "top.language": "EN",
   "theme.system": "跟随系统",
@@ -175,6 +188,10 @@ const zh: Record<MessageKey, string> = {
   "agent.send": "发送",
   "agent.pending": "等待 runner 送达",
   "agent.interrupt": "打断",
+  "agent.terminalClosed": "终端已关闭",
+  "agent.inTerminal": "Claude Code 终端",
+  "agent.details": "详情",
+  "dialog.terminal": "在 Claude Code 自己的终端里运行（skills、斜杠命令等原生功能都能用）",
   "agent.steer": "立即打断（steer）",
   "agent.fyi": "本轮结束后（fyi）",
   "agent.messagePlaceholder": "给这个 agent 发消息…",
@@ -193,6 +210,7 @@ const zh: Record<MessageKey, string> = {
   "activity.working": "工作中",
   "activity.idle": "空闲",
   "activity.unknown": "未知",
+  "activity.awaiting_input": "在终端里等你处理",
   "process.starting": "准备工作区中",
   "worktrees.title": "每个 agent 在探索什么",
   "worktrees.empty": "还没有 worktree。",
@@ -224,6 +242,9 @@ const zh: Record<MessageKey, string> = {
   "dialog.instructions": "补充说明",
   "dialog.agentGoal": "Agent 目标",
   "dialog.noGroup": "不加入 group（独立 agent）",
+  "dialog.repoPath": "仓库目录（runner 所在机器上）",
+  "dialog.repoPathOptional": "仓库目录（runner 所在机器上；留空则用 room 的 fork）",
+  "dialog.pickRepo": "选择…",
   "invite.title": "邀请成员",
   "invite.link": "分享这个链接（7 天内有效）：",
   "invite.desktop": "在 Mac（Intel 或 Apple Silicon）上安装桌面客户端，把下面这行粘贴到终端：",
@@ -239,6 +260,7 @@ const zh: Record<MessageKey, string> = {
   "desktop.notify.approval": "需要审批",
   "desktop.notify.unhealthy": "需要处理",
   "desktop.notify.review": "有发现等待审核",
+  "desktop.notify.input": "在终端里等你处理",
   "error.generic": "出错了",
 };
 
@@ -266,6 +288,8 @@ export function reasonText(lang: Language, r: StatusReason): string {
       return zh ? "未运行" : "not running";
     case "context_full":
       return zh ? "上下文已满" : "context window full";
+    case "input_waiting":
+      return zh ? "在终端里等你处理" : "waiting for you in its terminal";
     case "stalled":
       return zh ? `${r.minutes} 分钟没有动静` : `no activity for ${r.minutes} min`;
     case "phase_stale":

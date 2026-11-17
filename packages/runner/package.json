@@ -11,7 +11,7 @@
   "scripts": {
     "typecheck": "tsc -p .",
     "test": "vitest run --exclude 'test/**/*.e2e.test.ts'",
-    "test:e2e": "vitest run test/providers.e2e.test.ts",
+    "test:e2e": "vitest run test/providers.e2e.test.ts test/terminal.e2e.test.ts",
     "start": "tsx src/main.ts",
     "codegen:codex": "codex app-server generate-ts --out src/providers/codex-protocol"
   },
@@ -20,6 +20,7 @@
     "@banyan/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.0.3",
+    "node-pty": "1.1.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

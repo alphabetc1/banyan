@@ -3,7 +3,7 @@
 import { acquireRunnerLock, readSavedRunner, roomDir } from "@banyan/runner/registration";
 import { consoleLogger } from "@banyan/runner/logger";
 import { Runner } from "@banyan/runner/runner";
-import type { HostMessage, MainMessage } from "./host-protocol.ts";
+import type { HostMessage, MainMessage, TerminalPortMessage } from "./host-protocol.ts";
 
 const MONITOR_INTERVAL_MS = 10 * 60_000;
 
@@ -23,8 +23,9 @@ async function main(): Promise<void> {
     releaseLock();
     process.exit(code);
   };
-  port.on("message", (e: { data: MainMessage }) => {
+  port.on("message", (e: { data: MainMessage; ports: Electron.MessagePortMain[] }) => {
     if (e.data.type === "stop") void stop(0);
+    else if (e.data.type === "terminal" && e.ports[0]) connectTerminal(runner, e.data.agentId, e.ports[0]);
   });
   try {
     await runner.start();
@@ -34,6 +35,37 @@ async function main(): Promise<void> {
   }
   consoleLogger.info(`runner ${saved.runnerId} connected to room ${saved.roomId}`);
   send({ type: "running" });
+}
+
+// Streams an agent's terminal to a page over the port: output one way, keystrokes and size
+// changes the other.
+function connectTerminal(runner: Runner, agentId: string, view: Electron.MessagePortMain): void {
+  const post = (msg: TerminalPortMessage) => view.postMessage(msg);
+  const terminal = runner.terminal(agentId);
+  if (!terminal) {
+    post({ type: "closed", reason: "this agent has no running terminal on this machine" });
+    view.close();
+    return;
+  }
+  const attached = terminal.attach(
+    (data) => post({ type: "data", data }),
+    (detail) => {
+      post({ type: "closed", reason: detail });
+      view.close();
+    },
+  );
+  if (attached.backlog) post({ type: "data", data: attached.backlog });
+  view.on("message", (e: { data: TerminalPortMessage }) => {
+    const msg = e.data;
+    if (msg.type === "input") terminal.write(msg.data);
+    else if (msg.type === "resize") terminal.resize(msg.cols, msg.rows);
+    else if (msg.type === "close") {
+      attached.detach();
+      view.close();
+    }
+  });
+  view.on("close", () => attached.detach());
+  view.start();
 }
 
 main().catch((e: Error) => {

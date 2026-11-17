@@ -15,7 +15,9 @@ export type GoalStatus = z.infer<typeof GoalStatus>;
 export const ProcessState = z.enum(["starting", "running", "exited", "crashed", "unknown"]);
 export type ProcessState = z.infer<typeof ProcessState>;
 
-export const Activity = z.enum(["working", "idle", "unknown"]);
+// awaiting_input: a terminal agent waits for its person in the terminal, e.g. on a
+// permission prompt or the folder trust question.
+export const Activity = z.enum(["working", "idle", "awaiting_input", "unknown"]);
 export type Activity = z.infer<typeof Activity>;
 
 export const Resumability = z.enum(["live", "resumable", "context_full", "lost"]);
@@ -69,7 +71,9 @@ export const SERVER_ONLY_EVENT_TYPES = ["room.created", "member.joined", "runner
 export const EventDraft = z.discriminatedUnion("type", [
   variant(
     "room.created",
-    z.object({ name: ShortText, repoUrl: ShortText, baseBranch: ShortText, rootGoalId: Id, rootGoalTitle: ShortText, rootGoalDescription: LongText }),
+    // repoUrl and baseBranch are null for a room without a shared fork, such as a local
+    // workspace, whose agents each work in a repository on their runner's machine.
+    z.object({ name: ShortText, repoUrl: ShortText.nullable(), baseBranch: ShortText.nullable(), rootGoalId: Id, rootGoalTitle: ShortText, rootGoalDescription: LongText }),
   ),
   variant("member.joined", z.object({ memberId: Id, displayName: ShortText, role: z.enum(["owner", "member"]) })),
   variant("runner.registered", z.object({ runnerId: Id, memberId: Id, hostname: ShortText })),
@@ -79,7 +83,21 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant(
     "agent.created",
     // groupId is null for a standalone agent, which works on its goal outside any group.
-    z.object({ agentId: Id, groupId: Id.nullable(), runnerId: Id, name: ShortText, role: AgentRole, provider: Provider, model: ShortText, goalId: Id, instructions: LongText }),
+    // repoPath is a repository on the runner's machine to work in instead of the room's fork.
+    z.object({
+      agentId: Id,
+      groupId: Id.nullable(),
+      runnerId: Id,
+      name: ShortText,
+      role: AgentRole,
+      provider: Provider,
+      model: ShortText,
+      goalId: Id,
+      instructions: LongText,
+      repoPath: z.string().min(1).max(1000).optional(),
+      // Runs the provider's own interactive terminal UI instead of a managed session.
+      terminal: z.boolean().optional(),
+    }),
   ),
   variant("agent.session_bound", z.object({ agentId: Id, providerSessionId: Id })),
   variant("agent.process_changed", z.object({ agentId: Id, process: ProcessState, detail: LongText.optional() })),
