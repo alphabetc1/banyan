@@ -1,5 +1,5 @@
 // Small shared UI pieces.
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ThemeContext } from "../contexts.ts";
 import { LanguageContext, useT } from "../i18n.ts";
 import type { Agent } from "@banyan/shared";
@@ -18,6 +18,62 @@ export function Dialog({ title, onClose, children }: { title: string; onClose: (
         <h2>{title}</h2>
         {children}
       </div>
+    </div>
+  );
+}
+
+export type MenuItem = { label: string; onSelect: () => void; checked?: boolean; danger?: boolean } | { heading: string } | "separator";
+
+// A small menu at a point on the screen, such as where the person right-clicked. It closes on
+// a choice, a click elsewhere, Escape or scrolling.
+export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState({ x, y });
+  // Kept inside the window when opened near its right or bottom edge.
+  useLayoutEffect(() => {
+    const r = ref.current!.getBoundingClientRect();
+    setAt({ x: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)), y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) });
+  }, [x, y]);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="menu" role="menu" style={{ left: at.x, top: at.y }}>
+      {items.map((item, i) => {
+        if (item === "separator") return <div key={i} className="menu-separator" />;
+        if ("heading" in item)
+          return (
+            <div key={i} className="menu-heading">
+              {item.heading}
+            </div>
+          );
+        return (
+          <button
+            key={i}
+            role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+            aria-checked={item.checked}
+            className={item.danger ? "danger-text" : ""}
+            onClick={() => {
+              onClose();
+              item.onSelect();
+            }}
+          >
+            <span className="menu-check">{item.checked ? "✓" : ""}</span>
+            {item.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

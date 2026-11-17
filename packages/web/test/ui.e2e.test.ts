@@ -166,9 +166,10 @@ test("builds the goal tree and group from the UI, then shows live agent state an
   await expect(card).toContainText("waiting_gpu");
   await expect(card).toContainText("working");
 
-  // The overview lists the agent under its group with the same live status.
+  // The overview lists the agent, marked with its group, with the same live status.
   await page.getByRole("link", { name: "Overview" }).click();
-  const row = page.getByTestId("group-prefill team").getByTestId("agent-row-tok-worker");
+  const row = page.getByTestId("agent-row-tok-worker");
+  await expect(row.locator(".group-label")).toHaveText("prefill team ·");
   await expect(row.locator("[data-icon]")).toHaveAttribute("data-icon", "working");
   await expect(row).toContainText("waiting_gpu");
   await expect(row.locator("[data-kind]")).toHaveAttribute("data-kind", "codex");
@@ -198,7 +199,7 @@ test("creates standalone agents without any group and shows them on their goals"
   await expect(page.getByLabel("Role").locator("option[value=monitor]")).toBeDisabled();
   await page.getByLabel("Agent name").fill("solo");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByTestId("standalone-agents").getByTestId("agent-row-solo")).toBeVisible();
+  await expect(page.getByTestId("untagged-agents").getByTestId("agent-row-solo")).toBeVisible();
   // With no selection, the overview shows the first agent's conversation.
   await expect(page.locator(".agent-main h2")).toHaveText("solo");
   await expect(page.locator(".facts")).toContainText("Standalone");
@@ -356,6 +357,88 @@ test("reorders agents by dragging, keeps the order, and shows each agent's kind 
   await expect(page.locator(".agent-main h2")).toHaveText("one");
   await page.getByTestId("agent-row-one").press("Alt+ArrowDown");
   await expect.poll(names).toEqual(["three", "two", "one"]);
+});
+
+test("sorts agents into the person's own tags, moves them between tags and keeps the tags", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const common = { groupId: null, runnerId: runner.runnerId, role: "worker" as const, model: "default", goalId: room.rootGoalId, instructions: "", terminal: true, provider: "claude" as const };
+  await member.append(["one", "two", "three"].map((name) => draft("agent.created", { ...common, agentId: newId(), name })));
+  const namesIn = (section: string) => page.getByTestId(section).locator(".agent-row .name").allTextContents();
+  await expect.poll(() => namesIn("untagged-agents")).toEqual(["one", "two", "three"]);
+  // Without tags the list has no headers.
+  await expect(page.locator(".tag-header")).toHaveCount(0);
+  await expect(page.getByText("Untagged")).toHaveCount(0);
+
+  // A new tag starts empty; the other agents are then listed as untagged.
+  await page.getByRole("button", { name: "New tag" }).click();
+  await page.getByLabel("Tag name").fill("day0");
+  await page.getByRole("radio", { name: "Slate" }).click();
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByTestId("tag-day0")).toHaveClass(/tag-slate/);
+  await expect(page.getByText("Untagged")).toBeVisible();
+
+  // Right-click an agent to put it in a tag, or in a new tag.
+  await page.getByTestId("agent-row-two").click({ button: "right" });
+  await page.getByRole("menuitemradio", { name: "day0" }).click();
+  await expect.poll(() => namesIn("tag-day0")).toEqual(["two"]);
+  await page.getByTestId("agent-row-three").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New tag…" }).click();
+  await page.getByLabel("Tag name").fill("review");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect.poll(() => namesIn("tag-review")).toEqual(["three"]);
+  await expect.poll(() => namesIn("untagged-agents")).toEqual(["one"]);
+
+  const dragTo = async (testId: string, target: { x: number; y: number }) => {
+    const from = (await page.getByTestId(testId).boundingBox())!;
+    const start = { x: from.x + 40, y: from.y + from.height / 2 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(start.x, start.y + ((target.y - start.y) * i) / 10);
+    await page.mouse.up();
+  };
+  // Dropped on a tag's header, an agent joins the end of that tag.
+  const day0Header = (await page.getByTestId("tag-day0").locator(".tag-header").boundingBox())!;
+  await dragTo("agent-row-one", { x: day0Header.x + 40, y: day0Header.y + day0Header.height / 2 });
+  await expect.poll(() => namesIn("tag-day0")).toEqual(["two", "one"]);
+  await expect(page.getByTestId("untagged-agents")).toHaveCount(0);
+  // Dropped on another tag's agent, it lands next to that agent.
+  const three = (await page.getByTestId("agent-row-three").boundingBox())!;
+  await dragTo("agent-row-one", { x: three.x + 40, y: three.y + three.height / 2 + 4 });
+  await expect.poll(() => namesIn("tag-review")).toEqual(["three", "one"]);
+  await expect.poll(() => namesIn("tag-day0")).toEqual(["two"]);
+  // A drag does not open the agent it moved.
+  await expect(page).toHaveURL(`${base}/rooms/${room.roomId}`);
+
+  // A tag collapses to its header with a count; tags, members and collapsing survive a reload.
+  await page.getByTestId("tag-review").locator(".tag-header").click();
+  await expect(page.getByTestId("agent-row-three")).toHaveCount(0);
+  await expect(page.getByTestId("tag-review").locator(".tag-count")).toHaveText("2");
+  await page.reload();
+  await expect.poll(() => namesIn("tag-day0")).toEqual(["two"]);
+  await expect(page.getByTestId("tag-review").locator(".tag-count")).toHaveText("2");
+  await expect(page.getByRole("button", { name: "review", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("button", { name: "review", exact: true }).press("Enter");
+  await expect.poll(() => namesIn("tag-review")).toEqual(["three", "one"]);
+
+  // The tag menu renames and recolours a tag, or deletes it and leaves its agents untagged.
+  await page.getByTestId("tag-day0").locator(".tag-header").hover();
+  await page.getByTestId("tag-day0").getByRole("button", { name: "Tag menu" }).click();
+  await page.getByRole("menuitem", { name: "Edit tag…" }).click();
+  await expect(page.getByRole("radio", { name: "Slate" })).toHaveAttribute("aria-checked", "true");
+  await page.getByLabel("Tag name").fill("day1");
+  await page.getByRole("radio", { name: "Plum" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("tag-day1")).toHaveClass(/tag-plum/);
+  await page.getByTestId("tag-day1").locator(".tag-header").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete tag" }).click();
+  await expect(page.getByTestId("tag-day1")).toHaveCount(0);
+  await expect.poll(() => namesIn("untagged-agents")).toEqual(["two"]);
+  // Taking an agent out of its tag from its menu.
+  await page.getByTestId("agent-row-one").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove from tag" }).click();
+  await expect.poll(() => namesIn("untagged-agents")).toEqual(["two", "one"]);
 });
 
 test("shows an error instead of loading forever when saved credentials are rejected", async ({ page }) => {

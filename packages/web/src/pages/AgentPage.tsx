@@ -295,7 +295,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <StatusIcon kind={agentIcon(state, agent, store.onlineRunnerIds, now)} />
           <h2>{agent.name}</h2>
           <span className="pill">{t(`agent.${agent.role}`)}</span>
-          {agent.terminal && <span className="pill">{t("agent.inTerminal")}</span>}
+          {agent.terminal && <span className="pill">{t(`agent.inTerminal.${agent.provider}`)}</span>}
           {status.reasons.length > 0 && <span className="faint">{status.reasons.map(reasonText).join(" · ")}</span>}
           <span style={{ flex: 1 }} />
           <AgentActions agentId={agentId} />
