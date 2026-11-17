@@ -127,7 +127,7 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
 
   return (
     <div className="agents-layout">
-      <aside className="agent-list panel">
+      <aside className="agent-list">
         <div className="row">
           <h3 style={{ flex: 1 }}>{t("overview.agents")}</h3>
           <button className="primary" onClick={() => setCreating(true)}>

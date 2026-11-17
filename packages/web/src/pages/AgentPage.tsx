@@ -206,7 +206,7 @@ function Composer({ agentId }: { agentId: string }) {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim() && !action.busy) send();
           }}
         />
-        <div className="stack" style={{ gap: 6 }}>
+        <div className="composer-actions">
           <select value={delivery} onChange={(e) => setDelivery(e.target.value as Delivery)} aria-label="delivery">
             <option value="fyi">{t("agent.fyi")}</option>
             <option value="steer">{t("agent.steer")}</option>
