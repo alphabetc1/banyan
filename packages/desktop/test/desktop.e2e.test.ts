@@ -170,6 +170,58 @@ test("rejects a room server address it cannot reach", async () => {
   await app.close();
 });
 
+test("copies text out of a terminal, including from programs that take the mouse", async () => {
+  const { app, page } = await launch();
+  const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
+  const setClipboard = (text: string) => app.evaluate(({ clipboard }, t) => clipboard.writeText(t), text);
+  const saved = await clipboard();
+  try {
+    await page.getByRole("button", { name: "New agent" }).click();
+    await page.getByRole("radio", { name: "Terminal" }).click();
+    await page.getByLabel(/^Folder on the runner's machine/).fill(tempDir("copy-folder"));
+    await page.getByLabel("Agent name").fill("copy-shell");
+    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByTestId("agent-row-copy-shell").click();
+    const terminal = page.getByTestId("terminal");
+    await expect(terminal.locator(".xterm-rows")).toContainText("$", { timeout: 30_000 });
+    await terminal.click();
+
+    // Claude Code and Codex copy what the person selects in them with an OSC 52 sequence.
+    await setClipboard("<nothing>");
+    const encoded = Buffer.from("copied 复制").toString("base64");
+    await page.keyboard.type(`printf '\\033]52;c;${encoded}\\a'\n`);
+    await expect.poll(clipboard).toBe("copied 复制");
+    // A program asking to read the clipboard gets nothing and changes nothing.
+    await page.keyboard.type(`printf '\\033]52;c;?\\a'; echo READ-ASKED\n`);
+    await expect(terminal.locator(".xterm-rows")).toContainText("READ-ASKED");
+    expect(await clipboard()).toBe("copied 复制");
+
+    // With the mouse taken, as Codex and Claude Code do, a plain drag goes to the program and an
+    // Option-drag still selects.
+    await page.keyboard.type(`printf '\\033[?1000h\\033[?1002h\\033[?1006h'; echo SELECT-ME\n`);
+    await expect(terminal.locator(".xterm-rows")).toContainText("SELECT-ME");
+    const box = (await terminal.boundingBox())!;
+    const dragAndCopy = async (option: boolean) => {
+      await setClipboard("<nothing>");
+      if (option) await page.keyboard.down("Alt");
+      await page.mouse.move(box.x + 12, box.y + 12);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width - 12, box.y + box.height - 12, { steps: 10 });
+      await page.mouse.up();
+      if (option) await page.keyboard.up("Alt");
+      // What Edit > Copy (Cmd+C) does.
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.copy());
+      await page.waitForTimeout(300);
+      return clipboard();
+    };
+    expect(await dragAndCopy(false)).toBe("<nothing>");
+    expect(await dragAndCopy(true)).toContain("SELECT-ME");
+  } finally {
+    await setClipboard(saved);
+    await app.close();
+  }
+});
+
 test("opens a local workspace on first launch and runs agents in a repository on this machine", async () => {
   test.setTimeout(10 * 60_000);
   // A repository of the person's own, on a feature branch, with a remote of its own.

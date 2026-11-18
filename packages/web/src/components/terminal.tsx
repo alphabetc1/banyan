@@ -23,6 +23,9 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
       fontSize: 13,
       cursorBlink: true,
       allowProposedApi: false,
+      // Codex and other full-screen programs take the mouse, so a plain drag goes to them; as in
+      // Terminal and iTerm2, an Option-drag still selects text to copy.
+      macOptionClickForcesSelection: true,
       theme: { background: "#1f1e1c", foreground: "#ece9e2" },
     });
     const fit = new FitAddon();
@@ -35,6 +38,20 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
       (data) => term.write(data),
       (reason) => setClosed(reason),
     );
+    // Claude Code and Codex select text themselves while they hold the mouse and copy it with an
+    // OSC 52 sequence ("c;<base64>"). Only writing is honoured; a request to read the clipboard
+    // ("?") gets no answer, so programs in the terminal cannot see what the person copied.
+    const clipboardWrites = term.parser.registerOscHandler(52, (data) => {
+      const encoded = data.slice(data.indexOf(";") + 1);
+      if (encoded === "?") return true;
+      try {
+        const text = new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0)));
+        void navigator.clipboard.writeText(text).catch(() => {});
+      } catch {
+        // Not base64; nothing to copy.
+      }
+      return true;
+    });
     const input = term.onData((data) => connection.write(data));
     const resized = term.onResize(({ cols, rows }) => connection.resize(cols, rows));
     connection.resize(term.cols, term.rows);
@@ -73,6 +90,7 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
       observer.disconnect();
+      clipboardWrites.dispose();
       input.dispose();
       resized.dispose();
       connection.close();
