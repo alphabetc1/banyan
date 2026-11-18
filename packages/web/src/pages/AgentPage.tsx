@@ -307,6 +307,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <TerminalView
             roomId={store.roomId}
             agentId={agentId}
+            kind={agent.provider}
             sessionKey={`${agent.providerSessionId}:${agent.process}`}
             onRestart={stopped ? () => void store.append([draft("agent.restart_requested", { agentId })]) : undefined}
           />

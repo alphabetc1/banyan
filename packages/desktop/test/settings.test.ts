@@ -10,10 +10,10 @@ describe("settings", () => {
   it("starts empty and persists updates across instances", () => {
     const path = tempPath();
     const first = new SettingsFile(path);
-    expect(first.get()).toEqual({ serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS });
+    expect(first.get()).toEqual({ serverUrl: null, localWorkspace: null, lastOpened: "local", enabledRooms: [], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS, windowBounds: null });
     first.update({ serverUrl: "http://host:7700", lastOpened: "team" });
     first.update({ enabledRooms: ["r1"] });
-    const expected = { serverUrl: "http://host:7700", localWorkspace: null, lastOpened: "team", enabledRooms: ["r1"], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS };
+    const expected = { serverUrl: "http://host:7700", localWorkspace: null, lastOpened: "team", enabledRooms: ["r1"], lastRepoDir: null, terminalArgs: DEFAULT_TERMINAL_ARGS, windowBounds: null };
     expect(new SettingsFile(path).get()).toEqual(expected);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(expected);
     expect(existsSync(`${path}.tmp`)).toBe(false);

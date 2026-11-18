@@ -8,7 +8,8 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { readSavedRunner, registerRunner } from "@banyan/runner/registration";
 import type { LocalRunnerStatus } from "@banyan/shared";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import { contextMenuTemplate } from "./context-menu.ts";
 import { ensureLocalWorkspace, startLocalServer, type LocalServer } from "./local-workspace.ts";
 import { removeOldPastedImages, savePastedImage } from "./pasted-images.ts";
 import { RunnerManager } from "./runner-manager.ts";
@@ -17,6 +18,7 @@ import type { TerminalArgsLines } from "@banyan/shared";
 import type { TerminalArgs } from "./host-protocol.ts";
 import { DEFAULT_TERMINAL_ARGS, normalizeServerUrl, SettingsFile } from "./settings.ts";
 import { loginShellPath } from "./shell-env.ts";
+import { restorableBounds } from "./window-state.ts";
 
 const here = import.meta.dirname;
 const SETUP_URL = pathToFileURL(join(here, "setup.html")).href;
@@ -57,26 +59,40 @@ function runnerEnv(): NodeJS.ProcessEnv {
   return path ? { ...process.env, PATH: path } : { ...process.env };
 }
 
+function rememberWindowBounds(win: BrowserWindow): void {
+  settings.update({ windowBounds: win.getNormalBounds() });
+}
+
 function showWindow(): BrowserWindow {
   if (window) {
     window.show();
     window.focus();
     return window;
   }
+  const saved = restorableBounds(settings.get().windowBounds, screen.getAllDisplays().map((d) => d.workArea));
   const win = new BrowserWindow({
-    width: 1280,
-    height: 840,
+    ...(saved ?? { width: 1280, height: 840 }),
     minWidth: 720,
     minHeight: 480,
     title: "Banyan",
     webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
   });
+  // macOS reports moved and resized once a move or resize ends, so the file is not written
+  // while dragging; hiding the window and quitting record the place too.
+  const rememberBounds = () => rememberWindowBounds(win);
   win.on("close", (e) => {
+    rememberBounds();
     if (quitting) return;
     e.preventDefault();
     win.hide();
   });
   win.on("closed", () => (window = null));
+  win.on("moved", rememberBounds);
+  win.on("resized", rememberBounds);
+  win.webContents.on("context-menu", (_e, params) => {
+    const template = contextMenuTemplate(params, zh(), { openExternal: (url) => void shell.openExternal(url), copyText: (text) => clipboard.writeText(text) });
+    if (template.length > 0) Menu.buildFromTemplate(template).popup({ window: win });
+  });
   // Links leaving the room server open in the system browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
@@ -290,6 +306,8 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting || !runners) return;
     quitting = true;
     e.preventDefault();
+    // Quitting destroys the window without a close event.
+    if (window) rememberWindowBounds(window);
     void runners
       .stopAll()
       .then(() => {

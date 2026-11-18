@@ -2,14 +2,26 @@
 // client. The person types straight into Claude Code here.
 import { useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
+import type { Agent } from "@banyan/shared";
 import "@xterm/xterm/css/xterm.css";
 import { openTerminal, pathsForTerminal } from "../desktop.tsx";
 import { useT } from "../i18n.ts";
 
+// Web links open in the browser (the desktop client hands window.open to the system browser);
+// other schemes are ignored.
+function openLink(uri: string): void {
+  if (/^https?:\/\//i.test(uri)) window.open(uri, "_blank", "noopener");
+}
+
+// What Shift+Enter sends: Claude Code takes ESC CR as a new line in the prompt, as its own
+// /terminal-setup binds it in other terminals. Elsewhere it stays a plain Enter.
+const SHIFT_ENTER: Partial<Record<Agent["provider"], string>> = { claude: "\x1b\r" };
+
 // sessionKey changes when the agent's session restarts, so the view reconnects to the new one.
 // onRestart, when given, offers to start the agent again once its terminal has closed.
-export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomId: string; agentId: string; sessionKey: string; onRestart?: () => void }) {
+export function TerminalView({ roomId, agentId, kind, sessionKey, onRestart }: { roomId: string; agentId: string; kind: Agent["provider"]; sessionKey: string; onRestart?: () => void }) {
   const t = useT();
   const host = useRef<HTMLDivElement>(null);
   const [closed, setClosed] = useState<string | null>(null);
@@ -26,10 +38,15 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
       // Codex and other full-screen programs take the mouse, so a plain drag goes to them; as in
       // Terminal and iTerm2, an Option-drag still selects text to copy.
       macOptionClickForcesSelection: true,
+      // Links a program marks (OSC 8), such as the ones Claude Code prints.
+      linkHandler: { activate: (_e, uri) => openLink(uri) },
+      scrollback: 10_000,
       theme: { background: "#1f1e1c", foreground: "#ece9e2" },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Plain URLs in the output.
+    term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)));
     term.open(el);
     fit.fit();
     const connection = openTerminal(
@@ -51,6 +68,13 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
         // Not base64; nothing to copy.
       }
       return true;
+    });
+    const shiftEnter = SHIFT_ENTER[kind];
+    term.attachCustomKeyEventHandler((e) => {
+      if (!shiftEnter || e.key !== "Enter" || !e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return true;
+      // Both the keydown and the keypress are kept from xterm; the sequence goes once.
+      if (e.type === "keydown") connection.write(shiftEnter);
+      return false;
     });
     const input = term.onData((data) => connection.write(data));
     const resized = term.onResize(({ cols, rows }) => connection.resize(cols, rows));
@@ -96,7 +120,7 @@ export function TerminalView({ roomId, agentId, sessionKey, onRestart }: { roomI
       connection.close();
       term.dispose();
     };
-  }, [roomId, agentId, sessionKey]);
+  }, [roomId, agentId, kind, sessionKey]);
 
   return (
     <div className="terminal-pane" data-testid="terminal">

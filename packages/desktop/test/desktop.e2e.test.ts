@@ -70,7 +70,7 @@ async function launch(env: NodeJS.ProcessEnv = {}): Promise<{ app: ElectronAppli
   return { app, page };
 }
 
-const settingsFile = () => JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8")) as { serverUrl: string | null; enabledRooms: string[]; localWorkspace: { roomId: string }; terminalArgs: { claude: string; codex: string } };
+const settingsFile = () => JSON.parse(readFileSync(join(clientData, "settings.json"), "utf8")) as { serverUrl: string | null; enabledRooms: string[]; localWorkspace: { roomId: string }; terminalArgs: { claude: string; codex: string }; windowBounds: { x: number; y: number; width: number; height: number } | null };
 
 // The app opens on its local workspace; team rooms are reached through the room switcher.
 async function connectAndCreateRoom(page: Page, fork = createFork()): Promise<string> {
@@ -220,6 +220,101 @@ test("copies text out of a terminal, including from programs that take the mouse
     await setClipboard(saved);
     await app.close();
   }
+});
+
+test("opens a terminal's links in the browser, keeps Shift+Enter plain outside Claude Code, and offers a right-click menu", async () => {
+  const { app, page } = await launch();
+  // Links go to the system browser; recorded here instead.
+  await app.evaluate(({ shell }) => {
+    (globalThis as { opened?: string[] }).opened = [];
+    shell.openExternal = async (url: string) => void (globalThis as { opened?: string[] }).opened!.push(url);
+  });
+  const opened = () => app.evaluate(() => (globalThis as { opened?: string[] }).opened);
+  // A native menu would block the app until dismissed, and cannot be clicked from a test: menus
+  // are still built (the tray needs real ones) but not shown, and their items are recorded.
+  await app.evaluate(({ Menu }) => {
+    (globalThis as { menus?: string[][] }).menus = [];
+    const build = Menu.buildFromTemplate.bind(Menu);
+    Menu.buildFromTemplate = (template) => {
+      (globalThis as { menus?: string[][] }).menus!.push(template.map((i) => (i.type === "separator" ? "-" : `${i.label}${i.enabled === false ? " (disabled)" : ""}`)));
+      const menu = build(template);
+      menu.popup = () => {};
+      return menu;
+    };
+  });
+  const menus = () => app.evaluate(() => (globalThis as { menus?: string[][] }).menus);
+
+  const contextMenus = async () => (await menus())!.filter((m) => m.includes("Paste") || m.includes("Copy"));
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByLabel("Agent name").click({ button: "right" });
+  await expect.poll(contextMenus).toEqual([["Cut (disabled)", "Copy (disabled)", "Paste", "-", "Select All (disabled)"]]);
+  await page.getByRole("radio", { name: "Terminal" }).click();
+  await page.getByLabel(/^Folder on the runner's machine/).fill(tempDir("links-folder"));
+  await page.getByLabel("Agent name").fill("links-shell");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("agent-row-links-shell").click();
+  const terminal = page.getByTestId("terminal");
+  await expect(terminal.locator(".xterm-rows")).toContainText("$", { timeout: 30_000 });
+  await terminal.click();
+
+  // In a plain shell Shift+Enter is an ordinary Enter; the bytes the shell receives are recorded.
+  const keys = join(tempDir("keys"), "bytes");
+  await page.keyboard.type(`stty raw -echo; dd bs=1 count=4 of=${keys} 2>/dev/null; stty sane\n`);
+  await page.waitForTimeout(800);
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("|x|");
+  await expect.poll(() => (existsSync(keys) ? readFileSync(keys, "latin1") : "")).toBe("\r|x|");
+
+  // A plain URL and a link a program marks (OSC 8), with the mouse free and then taken by the
+  // program, as Claude Code and Codex take it.
+  const clickLine = async (text: string) => {
+    const line = (await terminal.locator(".xterm-rows > div", { hasText: text }).first().boundingBox())!;
+    await page.mouse.move(line.x + 25, line.y + line.height / 2);
+    await page.waitForTimeout(300);
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  await page.keyboard.type(`clear; printf 'https://example.com/plain\\n\\033]8;;https://example.com/marked\\aMARKED-LINK\\033]8;;\\a\\n'\n`);
+  await expect(terminal.locator(".xterm-rows")).toContainText("MARKED-LINK");
+  await clickLine("example.com/plain");
+  await clickLine("MARKED-LINK");
+  await expect.poll(opened).toEqual(["https://example.com/plain", "https://example.com/marked"]);
+  await page.keyboard.type(`clear; printf '\\033[?1000h\\033[?1006h'; printf 'https://example.com/taken\\n'\n`);
+  await expect(terminal.locator(".xterm-rows")).toContainText("example.com/taken");
+  await clickLine("example.com/taken");
+  await expect.poll(opened).toEqual(["https://example.com/plain", "https://example.com/marked", "https://example.com/taken"]);
+  // Other schemes are not opened.
+  await page.keyboard.type(`printf '\\033[?1000l'; clear; printf '\\033]8;;file:///etc/hosts\\aFILE-LINK\\033]8;;\\a\\n'\n`);
+  await expect(terminal.locator(".xterm-rows")).toContainText("FILE-LINK");
+  await clickLine("FILE-LINK");
+  await page.waitForTimeout(500);
+  expect(await opened()).toHaveLength(3);
+
+  // Right-clicking selected terminal text offers to copy it.
+  const first = (await terminal.locator(".xterm-rows > div", { hasText: "FILE-LINK" }).first().boundingBox())!;
+  await page.mouse.move(first.x + 2, first.y + first.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(first.x + 60, first.y + first.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.click(first.x + 30, first.y + first.height / 2, { button: "right" });
+  await expect.poll(async () => (await contextMenus()).at(-1)).toEqual(["Cut", "Copy", "Paste", "-", "Select All"]);
+  // Typing goes on as usual afterwards.
+  await terminal.click();
+  await page.keyboard.type("echo AFTER-$((1+2))\n");
+  await expect(terminal.locator(".xterm-rows")).toContainText("AFTER-3");
+
+  await app.close();
+});
+
+test("opens the window where the person left it", async () => {
+  let { app } = await launch();
+  const bounds = { x: 140, y: 160, width: 1000, height: 700 };
+  await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0]!.setBounds(b), bounds);
+  await app.close();
+  expect(settingsFile().windowBounds).toEqual(bounds);
+  ({ app } = await launch());
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds())).toEqual(bounds);
+  await app.close();
 });
 
 test("opens a local workspace on first launch and runs agents in a repository on this machine", async () => {
@@ -544,13 +639,16 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
 
   // Typing into the terminal talks to Claude Code directly; the list follows its turn.
   await terminal.click();
-  await page.keyboard.type("Reply with exactly the word TYPED-OK and nothing else.");
+  // Shift+Enter starts a new line in Claude Code's prompt instead of sending it.
+  await page.keyboard.type("Reply with exactly the word TYPED-OK");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("and nothing else.");
   await page.keyboard.press("Enter");
   await waitFor(async () => (await transcript()).some((e) => e.kind === "assistant" && e.text.includes("TYPED-OK")), "the agent acting on typed input", 5 * 60_000, 1000);
   await expect(terminal).toContainText("TYPED-OK");
   await expect(icon).toHaveAttribute("data-icon", "done");
   // A plain session: Claude Code got just what the person typed, without Banyan's coordination.
-  expect((await transcript()).filter((e) => e.kind === "user").map((e) => e.text)).toEqual(["Reply with exactly the word TYPED-OK and nothing else."]);
+  expect((await transcript()).filter((e) => e.kind === "user").map((e) => e.text)).toEqual(["Reply with exactly the word TYPED-OK\nand nothing else."]);
 
   // An image pasted with the usual shortcut goes in as a saved file, which Claude Code attaches.
   await terminal.click();
