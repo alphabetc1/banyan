@@ -506,8 +506,11 @@ Then reply DONE.`;
   ({ app, page } = await launch());
   await page.goto(`${server.base}/rooms/${roomId}/agents/${agents.claude}`);
   await expect(page.getByTestId("local-runner")).toHaveText("Local runner running");
+  // Reaching step 3 is read from the transcript rather than the current phase, which an agent
+  // may move past on its own (Codex sometimes reports "done" right after).
+  const reportedAfterCrash = async (provider: "claude" | "codex") => (await transcriptTexts(roomId, agents[provider], token)).some((t) => /room_set_status .*"phase":"after-crash"/.test(t));
   for (const provider of ["claude", "codex"] as const) {
-    await waitFor(async () => (await phase(provider)) === "after-crash", `${provider} reaching after-crash`, 5 * 60_000, 1000).catch(async (e: Error) => {
+    await waitFor(() => reportedAfterCrash(provider), `${provider} reaching after-crash`, 5 * 60_000, 1000).catch(async (e: Error) => {
       // What the agent was doing, so a timeout explains itself.
       const a = (await server.state(roomId, token)).agents[agents[provider]]!;
       const recent = (await transcriptTexts(roomId, agents[provider], token)).slice(0, 8);
