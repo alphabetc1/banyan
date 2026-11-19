@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { agentGroup, draft, isPlainAgent, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
-import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
+import { directiveChangedMessage, freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
 import { commitAll, copyUncommittedChanges, createWorktree, ensureClone, git, hasCommit, pushBranch, worktreeStatus } from "./worktree.ts";
@@ -122,6 +122,8 @@ export class Supervisor {
         this.openApprovals.delete(e.payload.approvalId);
       } else if (e.type === "post.created" && e.payload.proposeRoomVisible) {
         this.notifyReviewers(state, e.payload.postId);
+      } else if (e.type === "memory.recorded" || e.type === "memory.updated" || e.type === "memory.retired") {
+        this.notifyDirectiveChange(state, e.payload.entryId, e.type === "memory.recorded" ? "added" : e.type === "memory.updated" ? "changed" : "retired");
       } else if (e.type === "agent.phase_reported" && LEADER_ALERT_PHASES.has(e.payload.phase)) {
         this.notifyLeader(state, e.payload.agentId, e.payload.phase, e.payload.note ?? null);
       }
@@ -414,6 +416,16 @@ export class Supervisor {
     const leaderId = agent ? agentGroup(state, agent)?.leaderAgentId : null;
     if (!agent || agent.role !== "worker" || !leaderId) return;
     this.running.get(leaderId)?.session.send(workerPhaseMessage(agent.name, phase, note), "fyi");
+  }
+
+  // Running agents started with the directives of that moment; later changes reach them as a
+  // note. Plain agents know nothing of the room.
+  private notifyDirectiveChange(state: RoomState, entryId: string, change: "added" | "changed" | "retired"): void {
+    const entry = state.memory[entryId];
+    if (entry?.kind !== "directive") return;
+    for (const agent of this.mine(state)) {
+      if (!isPlainAgent(state, agent)) this.running.get(agent.id)?.session.send(directiveChangedMessage(change, entry), "fyi");
+    }
   }
 
   private nudgeMonitors(): void {

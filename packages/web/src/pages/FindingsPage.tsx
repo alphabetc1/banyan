@@ -1,7 +1,7 @@
 // Findings board: awaiting review, shared within groups, and shared with the whole room.
 // Humans may approve or reject any post, overriding leaders.
 import { useContext } from "react";
-import { draft, type Post } from "@banyan/shared";
+import { draft, newId, type Post } from "@banyan/shared";
 import { timeAgo, useAction, useNow } from "../components/common.tsx";
 import { useRoomStore } from "../contexts.ts";
 import { actorName, postColumn, type PostColumn } from "../derive.ts";
@@ -22,6 +22,13 @@ function PostCard({ post }: { post: Post }) {
   const action = useAction();
   const state = store.state!;
   const review = (decision: "approved" | "rejected") => void action.run(() => store.append([draft("post.reviewed", { postId: post.id, decision })]));
+  // A finding or conclusion worth keeping becomes a fact; a learning joins on approval.
+  const inMemory = Object.values(state.memory).some((m) => m.sourcePostId === post.id && !m.retired);
+  const keep = () => {
+    const evidence = post.evidence.map((ev) => `${ev.label}: ${ev.detail}`).join("\n");
+    const body = [post.body, evidence].filter(Boolean).join("\n\n");
+    void action.run(() => store.append([draft("memory.recorded", { entryId: newId(), kind: "fact", title: post.summary, body, sourcePostId: post.id })]));
+  };
   return (
     <div className="post" data-testid={`post-${post.summary}`}>
       <div className="row">
@@ -41,6 +48,18 @@ function PostCard({ post }: { post: Post }) {
         <div className="faint">
           {t("findings.reviewedBy")} {actorName(state, post.review.by)}
           {post.review.note ? ` — ${post.review.note}` : ""}
+        </div>
+      )}
+      {post.kind === "learning" && post.review.state === "pending" && <div className="faint">{t("findings.learningHint")}</div>}
+      {post.kind !== "learning" && (
+        <div className="row">
+          {inMemory ? (
+            <span className="faint">{t("memory.kept")}</span>
+          ) : (
+            <button className="ghost" disabled={action.busy} onClick={keep}>
+              {t("memory.keep")}
+            </button>
+          )}
         </div>
       )}
       {post.proposeRoomVisible && (

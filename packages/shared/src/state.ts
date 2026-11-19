@@ -8,6 +8,7 @@ import type {
   DiffStat,
   Evidence,
   GoalStatus,
+  MemoryKind,
   PostKind,
   ProcessState,
   Provider,
@@ -119,6 +120,20 @@ export interface Post {
   createdAt: number;
 }
 
+export interface MemoryEntry {
+  id: string;
+  kind: MemoryKind;
+  title: string;
+  body: string;
+  // The post it came from: the approved learning, or a finding a person kept.
+  sourcePostId: string | null;
+  recordedBy: Actor | null;
+  recordedAt: number;
+  updatedAt: number;
+  // Retired entries stay for history but no longer reach agents.
+  retired: boolean;
+}
+
 export interface Approval {
   id: string;
   agentId: string;
@@ -149,6 +164,7 @@ export interface RoomState {
   agents: Record<string, Agent>;
   worktrees: Record<string, Worktree>;
   posts: Record<string, Post>;
+  memory: Record<string, MemoryEntry>;
   approvals: Record<string, Approval>;
   messages: Record<string, Message>;
   lastSeq: number;
@@ -164,6 +180,7 @@ export function emptyRoomState(): RoomState {
     agents: {},
     worktrees: {},
     posts: {},
+    memory: {},
     approvals: {},
     messages: {},
     lastSeq: 0,
@@ -348,7 +365,33 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
     }
     case "post.reviewed": {
       const post = state.posts[e.payload.postId];
-      if (post) post.review = { state: e.payload.decision, by: e.actor, note: e.payload.note ?? null };
+      if (!post) break;
+      post.review = { state: e.payload.decision, by: e.actor, note: e.payload.note ?? null };
+      // An approved learning joins the memory under the post's id; rejecting it later retires it.
+      if (post.kind !== "learning") break;
+      const entry = state.memory[post.id];
+      if (e.payload.decision === "approved") {
+        if (entry) entry.retired = false;
+        else state.memory[post.id] = { id: post.id, kind: "learning", title: post.summary, body: post.body, sourcePostId: post.id, recordedBy: e.actor, recordedAt: e.ts, updatedAt: e.ts, retired: false };
+      } else if (entry) {
+        entry.retired = true;
+        entry.updatedAt = e.ts;
+      }
+      break;
+    }
+    case "memory.recorded": {
+      const p = e.payload;
+      state.memory[p.entryId] = { id: p.entryId, kind: p.kind, title: p.title, body: p.body, sourcePostId: p.sourcePostId ?? null, recordedBy: e.actor, recordedAt: e.ts, updatedAt: e.ts, retired: false };
+      break;
+    }
+    case "memory.updated": {
+      const entry = state.memory[e.payload.entryId];
+      if (entry) Object.assign(entry, { title: e.payload.title, body: e.payload.body, updatedAt: e.ts });
+      break;
+    }
+    case "memory.retired": {
+      const entry = state.memory[e.payload.entryId];
+      if (entry) Object.assign(entry, { retired: true, updatedAt: e.ts });
       break;
     }
     case "approval.requested": {
@@ -436,6 +479,13 @@ export function agentGroup(state: RoomState, agent: Agent): Group | undefined {
 // coordination instructions, no Room MCP and no kickoff of its own.
 export function isPlainAgent(state: RoomState, agent: Agent): boolean {
   return agent.provider === "shell" || (state.room?.personal === true && agent.groupId === null);
+}
+
+// Memory entries that still reach agents, oldest first.
+export function activeMemory(state: RoomState): MemoryEntry[] {
+  return Object.values(state.memory)
+    .filter((e) => !e.retired)
+    .sort((a, b) => a.recordedAt - b.recordedAt);
 }
 
 export function postReviewers(state: RoomState, post: Post): string[] {

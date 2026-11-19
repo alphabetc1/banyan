@@ -950,6 +950,13 @@ label {
   color: var(--text-muted);
   white-space: pre-wrap;
 }
+.memory {
+  max-width: 820px;
+}
+.post.retired {
+  opacity: 0.6;
+}
+
 .diffbar {
   display: flex;
   height: 6px;

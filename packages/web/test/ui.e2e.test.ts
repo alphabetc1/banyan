@@ -546,6 +546,65 @@ test("keeps transcripts apart when switching agents before a page finishes loadi
   await expect(page.getByTestId("transcript")).not.toContainText("alpha says hi");
 });
 
+test("keeps the room's memory: directives and facts people write, findings they keep, learnings they approve", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const worker = newId();
+  await member.append([draft("agent.created", { agentId: worker, groupId: null, runnerId: runner.runnerId, name: "digger", role: "worker", provider: "claude", model: "default", goalId: room.rootGoalId, instructions: "" })]);
+  const r = await socket(room.roomId, runner.runnerToken);
+  const finding = newId();
+  const learning = newId();
+  await r.append([draft("post.created", { postId: finding, agentId: worker, kind: "finding", summary: "tokenizer is 30% of prefill", body: "profiled with py-spy", evidence: [{ label: "trace", detail: "trace.svg" }], proposeRoomVisible: false })], worker);
+  await r.append([draft("post.created", { postId: learning, agentId: worker, kind: "learning", summary: "Warm up the GPU before timing", body: "First runs are 20% slower.", evidence: [], proposeRoomVisible: true })], worker);
+
+  await page.getByRole("link", { name: "Memory" }).click();
+  await expect(page.getByTestId("memory-section-directive")).toContainText("Nothing here yet.");
+  // A directive, then a fact.
+  await page.getByLabel("Title").fill("Benchmark on H100 only");
+  await page.getByLabel("Details").fill("Other GPUs give misleading numbers.");
+  await page.getByRole("button", { name: "Add to memory" }).click();
+  await expect(page.getByTestId("memory-section-directive").getByTestId("memory-Benchmark on H100 only")).toContainText("Other GPUs give misleading numbers.");
+  await expect(page.getByLabel("Title")).toHaveValue("");
+  await page.getByRole("radio", { name: "Fact" }).click();
+  await page.getByLabel("Title").fill("CI runs on 4 GPUs");
+  await page.getByRole("button", { name: "Add to memory" }).click();
+  await expect(page.getByTestId("memory-section-fact").getByTestId("memory-CI runs on 4 GPUs")).toBeVisible();
+
+  // Editing and retiring.
+  const directive = page.getByTestId("memory-Benchmark on H100 only");
+  await directive.getByRole("button", { name: "Edit" }).click();
+  await page.getByTestId("memory-Benchmark on H100 only").getByLabel("Title").fill("Benchmark on H100 or H200");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("memory-section-directive").getByTestId("memory-Benchmark on H100 or H200")).toBeVisible();
+  await page.getByTestId("memory-CI runs on 4 GPUs").getByRole("button", { name: "Retire" }).click();
+  await expect(page.getByTestId("memory-section-fact")).toContainText("Nothing here yet.");
+  await page.getByRole("button", { name: "Retired (1)" }).click();
+  await expect(page.getByTestId("memory-section-retired").getByTestId("memory-CI runs on 4 GPUs")).toBeVisible();
+  await expect(page.getByTestId("memory-section-retired").getByRole("button", { name: "Edit" })).toHaveCount(0);
+
+  // On the findings board: keeping a finding makes it a fact; approving a learning adds it.
+  await page.getByRole("link", { name: "Findings" }).click();
+  const findingCard = page.getByTestId("post-tokenizer is 30% of prefill");
+  await findingCard.getByRole("button", { name: "Keep in memory" }).click();
+  await expect(findingCard).toContainText("In memory");
+  const learningCard = page.getByTestId("post-Warm up the GPU before timing");
+  await expect(learningCard).toContainText("Approving adds it to the room's memory.");
+  await expect(learningCard.getByRole("button", { name: "Keep in memory" })).toHaveCount(0);
+  await learningCard.getByRole("button", { name: "Approve" }).click();
+  await page.getByRole("link", { name: "Memory" }).click();
+  await expect(page.getByTestId("memory-section-fact").getByTestId("memory-tokenizer is 30% of prefill")).toContainText("profiled with py-spy\n\ntrace: trace.svg");
+  await expect(page.getByTestId("memory-section-fact").getByTestId("memory-tokenizer is 30% of prefill")).toContainText("from digger");
+  await expect(page.getByTestId("memory-section-learning").getByTestId("memory-Warm up the GPU before timing")).toContainText("First runs are 20% slower.");
+  const state = await serverState(room.roomId, room.token);
+  expect(Object.values(state.memory).map((m) => [m.kind, m.title, m.retired]).sort()).toEqual([
+    ["directive", "Benchmark on H100 or H200", false],
+    ["fact", "CI runs on 4 GPUs", true],
+    ["fact", "tokenizer is 30% of prefill", false],
+    ["learning", "Warm up the GPU before timing", false],
+  ]);
+});
+
 test("reviews findings as a human, shows worktrees and coordination, and switches language and theme", async ({ page }) => {
   const room = await createRoomInUi(page);
   const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);

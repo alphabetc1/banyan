@@ -319,6 +319,44 @@ describe("authorize", () => {
     expect(r.submit(ALICE, fork({ agentId: "F6", forkOf: "T" }))).toBe("unknown agent T");
   });
 
+  it("keeps the room's memory: people record, edit and retire entries; agents only propose learnings", () => {
+    const r = seededRoom();
+    r.must(ALICE, draft("memory.recorded", { entryId: "d1", kind: "directive", title: "Benchmark on H100 only", body: "Other GPUs give misleading numbers." }));
+    expect(r.state.memory.d1).toMatchObject({ kind: "directive", title: "Benchmark on H100 only", sourcePostId: null, recordedBy: ALICE, retired: false });
+    expect(r.submit(agent("W1"), draft("memory.recorded", { entryId: "d2", kind: "fact", title: "x", body: "" }))).toBe("only people record memory; agents propose learnings");
+    expect(r.submit(ALICE, draft("memory.recorded", { entryId: "d1", kind: "fact", title: "x", body: "" }))).toBe("memory entry d1 already exists");
+    expect(r.submit(ALICE, draft("memory.recorded", { entryId: "f0", kind: "fact", title: "x", body: "", sourcePostId: "nope" }))).toBe("unknown post nope");
+    // A finding a person keeps as a fact remembers where it came from.
+    r.must(agent("W1"), draft("post.created", { postId: "pf", agentId: "W1", kind: "finding", summary: "tokenizer is 30% of prefill", body: "profiled", evidence: [], proposeRoomVisible: false }));
+    r.must(BOB, draft("memory.recorded", { entryId: "f1", kind: "fact", title: "tokenizer is 30% of prefill", body: "profiled", sourcePostId: "pf" }));
+    expect(r.state.memory.f1).toMatchObject({ sourcePostId: "pf", recordedBy: BOB });
+
+    r.must(BOB, draft("memory.updated", { entryId: "d1", title: "Benchmark on H100 or H200", body: "" }));
+    expect(r.state.memory.d1).toMatchObject({ title: "Benchmark on H100 or H200", body: "" });
+    expect(r.submit(agent("W1"), draft("memory.retired", { entryId: "d1" }))).toBe("only people change memory");
+    r.must(ALICE, draft("memory.retired", { entryId: "d1" }));
+    expect(r.state.memory.d1!.retired).toBe(true);
+    expect(r.submit(ALICE, draft("memory.updated", { entryId: "d1", title: "t", body: "" }))).toBe("the memory entry has been retired");
+    expect(r.submit(ALICE, draft("memory.retired", { entryId: "zz" }))).toBe("unknown memory entry zz");
+  });
+
+  it("turns an approved learning into memory, and retires it if the approval is overturned", () => {
+    const r = seededRoom();
+    r.must(agent("W1"), draft("post.created", { postId: "pl", agentId: "W1", kind: "learning", summary: "Warm up the GPU before timing", body: "First runs are 20% slower.", evidence: [], proposeRoomVisible: true }));
+    expect(r.state.memory).toEqual({});
+    r.must(agent("L"), draft("post.reviewed", { postId: "pl", decision: "approved" }));
+    expect(r.state.memory.pl).toMatchObject({ kind: "learning", title: "Warm up the GPU before timing", body: "First runs are 20% slower.", sourcePostId: "pl", recordedBy: agent("L"), retired: false });
+    // A person overrules the leader, then changes their mind again.
+    r.must(BOB, draft("post.reviewed", { postId: "pl", decision: "rejected" }));
+    expect(r.state.memory.pl!.retired).toBe(true);
+    r.must(ALICE, draft("post.reviewed", { postId: "pl", decision: "approved" }));
+    expect(r.state.memory.pl!.retired).toBe(false);
+    // Other kinds of posts never become memory on their own.
+    r.must(agent("W1"), draft("post.created", { postId: "pc", agentId: "W1", kind: "conclusion", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
+    r.must(agent("L"), draft("post.reviewed", { postId: "pc", decision: "approved" }));
+    expect(Object.keys(r.state.memory)).toEqual(["pl"]);
+  });
+
   it("lets leaders create goals only inside their subtree", () => {
     const r = seededRoom();
     r.must(agent("L"), draft("goal.created", { goalId: "kv", parentId: "prefill", title: "kv", description: "" }));

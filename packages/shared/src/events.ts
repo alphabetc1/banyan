@@ -24,8 +24,14 @@ export type Activity = z.infer<typeof Activity>;
 export const Resumability = z.enum(["live", "resumable", "context_full", "lost"]);
 export type Resumability = z.infer<typeof Resumability>;
 
-export const PostKind = z.enum(["direction", "finding", "conclusion"]);
+// A learning is an agent's proposal for the room's memory; it joins the memory once approved.
+export const PostKind = z.enum(["direction", "finding", "conclusion", "learning"]);
 export type PostKind = z.infer<typeof PostKind>;
+
+// The room's memory, which outlives sessions: standing directives people give every agent,
+// facts about the work, and learnings agents proposed and a reviewer approved.
+export const MemoryKind = z.enum(["directive", "fact", "learning"]);
+export type MemoryKind = z.infer<typeof MemoryKind>;
 
 export const ReviewDecision = z.enum(["approved", "rejected"]);
 export type ReviewDecision = z.infer<typeof ReviewDecision>;
@@ -123,6 +129,9 @@ export const EventDraft = z.discriminatedUnion("type", [
     z.object({ postId: Id, agentId: Id, kind: PostKind, summary: ShortText, body: LongText, evidence: z.array(Evidence).max(20), proposeRoomVisible: z.boolean() }),
   ),
   variant("post.reviewed", z.object({ postId: Id, decision: ReviewDecision, note: LongText.optional() })),
+  variant("memory.recorded", z.object({ entryId: Id, kind: MemoryKind, title: ShortText, body: LongText, sourcePostId: Id.optional() })),
+  variant("memory.updated", z.object({ entryId: Id, title: ShortText, body: LongText })),
+  variant("memory.retired", z.object({ entryId: Id })),
   variant("approval.requested", z.object({ approvalId: Id, agentId: Id, tool: ShortText, input: LongText })),
   variant("approval.decided", z.object({ approvalId: Id, decision: ApprovalDecision, note: LongText.optional() })),
   // The agent process that asked is gone (crash or restart), so nobody waits for a decision.

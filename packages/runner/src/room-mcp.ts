@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import {
+  activeMemory,
   agentGroup,
   authorize,
   deriveHealth,
@@ -25,6 +26,7 @@ import {
 } from "@banyan/shared";
 
 const CONTEXT_POSTS_MAX = 30;
+const MEMORY_RESULTS_MAX = 20;
 
 export interface RoomAccess {
   state(): RoomState;
@@ -148,6 +150,46 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
       const postId = newId();
       const error = write(draft("post.created", { postId, agentId, kind, summary, body, evidence, proposeRoomVisible }));
       return error ? fail(error) : ok({ postId, visibility: proposeRoomVisible ? "group, pending room review" : "group" });
+    },
+  );
+
+  server.registerTool(
+    "room_search_memory",
+    {
+      description:
+        "Search the room's memory: standing directives, facts and approved learnings from earlier work, which outlive every session. Matches any of the query's words, best matches first; without a query, lists the newest entries.",
+      inputSchema: { query: z.string().max(200).optional(), kind: z.enum(["directive", "fact", "learning"]).optional() },
+    },
+    async ({ query, kind }) => {
+      const words = (query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      const found = activeMemory(room.state())
+        .filter((e) => !kind || e.kind === kind)
+        .map((e) => {
+          const text = `${e.title} ${e.body}`.toLowerCase();
+          return { e, score: words.filter((w) => text.includes(w)).length };
+        })
+        .filter(({ score }) => words.length === 0 || score > 0)
+        .sort((a, b) => b.score - a.score || b.e.recordedAt - a.e.recordedAt)
+        .slice(0, MEMORY_RESULTS_MAX);
+      return ok(found.map(({ e }) => ({ kind: e.kind, title: e.title, body: e.body })));
+    },
+  );
+
+  server.registerTool(
+    "room_propose_learning",
+    {
+      description:
+        "Propose a lesson for the room's memory: a pitfall, a reliable method or a measured fact that agents after you should know. A reviewer (your leader or a person) approves it before it joins the memory.",
+      inputSchema: {
+        title: z.string().min(1).max(300),
+        body: z.string().max(10_000),
+        evidence: z.array(z.object({ label: z.string().min(1).max(200), detail: z.string().max(5000) })).max(20).default([]),
+      },
+    },
+    async ({ title, body, evidence }) => {
+      const postId = newId();
+      const error = write(draft("post.created", { postId, agentId, kind: "learning", summary: title, body, evidence, proposeRoomVisible: true }));
+      return error ? fail(error) : ok({ postId, status: "pending review" });
     },
   );
 

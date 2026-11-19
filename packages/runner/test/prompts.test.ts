@@ -17,6 +17,27 @@ function room(): RoomState {
 }
 
 describe("system prompt", () => {
+  it("carries the room's standing directives, not retired ones or other memory", () => {
+    const state = room();
+    const member: Actor = { kind: "member", id: "m" };
+    for (const d of [
+      draft("memory.recorded", { entryId: "d1", kind: "directive", title: "Benchmark on H100 only", body: "Other GPUs mislead." }),
+      draft("memory.recorded", { entryId: "d2", kind: "directive", title: "Never push to main", body: "" }),
+      draft("memory.recorded", { entryId: "d3", kind: "directive", title: "Old rule", body: "" }),
+      draft("memory.retired", { entryId: "d3" }),
+      draft("memory.recorded", { entryId: "f1", kind: "fact", title: "A fact to search for", body: "" }),
+    ]) {
+      applyEvent(state, { ...d, seq: state.lastSeq + 1, roomId: "room", ts: state.lastSeq + 1, actor: member });
+    }
+    const prompt = systemPrompt(state, state.agents.w!);
+    expect(prompt).toContain("Standing directives from the people in this room; always follow them:\n- Benchmark on H100 only: Other GPUs mislead.\n- Never push to main");
+    expect(prompt).not.toContain("Old rule");
+    expect(prompt).not.toContain("A fact to search for");
+    expect(prompt).toContain("room_search_memory");
+    // Without directives there is no empty section.
+    expect(systemPrompt(room(), room().agents.w!)).not.toContain("Standing directives");
+  });
+
   it("names the group of a group member", () => {
     const state = room();
     const prompt = systemPrompt(state, state.agents.w!);

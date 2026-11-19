@@ -79,7 +79,7 @@ const textOf = (r: CallResult) => r.content[0]?.text ?? "";
 describe("Room MCP", () => {
   it("exposes tools by role", async () => {
     const { ids, client } = await setup();
-    const common = ["room_declare_direction", "room_get_context", "room_list_directions", "room_post_finding", "room_set_status"];
+    const common = ["room_declare_direction", "room_get_context", "room_list_directions", "room_post_finding", "room_propose_learning", "room_search_memory", "room_set_status"];
     expect(await (await client(ids.W1)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.W2)).tools()).toEqual([...common, "room_commit"].sort());
     expect(await (await client(ids.X)).tools()).toEqual([...common, "room_commit"].sort());
@@ -100,6 +100,37 @@ describe("Room MCP", () => {
     const early = await (await client(ids.W2)).call("room_commit", { message: "x" });
     expect(early.isError).toBe(true);
     expect(textOf(early)).toBe("commit failed: no worktree");
+  });
+
+  it("searches the room's memory and proposes learnings that join it once approved", async () => {
+    const { ids, client, server, room, link, store } = await setup();
+    // Recorded apart, so the newer entries have a later timestamp.
+    await appendAsMember(server, room.roomId, room.memberToken, [draft("memory.recorded", { entryId: "d1", kind: "directive", title: "Benchmark on H100 only", body: "Other GPUs mislead." })]);
+    await new Promise((r) => setTimeout(r, 20));
+    await appendAsMember(server, room.roomId, room.memberToken, [
+      draft("memory.recorded", { entryId: "f1", kind: "fact", title: "Tokenizer is 30% of prefill", body: "Measured with py-spy on the sharegpt set." }),
+      draft("memory.recorded", { entryId: "old", kind: "fact", title: "Prefill uses the old tokenizer", body: "" }),
+      draft("memory.retired", { entryId: "old" }),
+    ]);
+    await waitFor(() => link.state!.memory.old?.retired, "memory in projection");
+    const w1 = await client(ids.W1);
+    const search = async (args: Record<string, unknown>) => (JSON.parse(textOf(await w1.call("room_search_memory", args))) as { kind: string; title: string }[]).map((e) => e.title);
+    // Retired entries never come back; matches on more words rank first.
+    expect(await search({ query: "prefill tokenizer" })).toEqual(["Tokenizer is 30% of prefill"]);
+    // Equal matches come newest first.
+    expect(await search({ query: "H100 py-spy" })).toEqual(["Tokenizer is 30% of prefill", "Benchmark on H100 only"]);
+    expect(await search({})).toEqual(["Tokenizer is 30% of prefill", "Benchmark on H100 only"]);
+    expect(await search({ kind: "directive" })).toEqual(["Benchmark on H100 only"]);
+    expect(await search({ query: "nothing-like-this" })).toEqual([]);
+
+    const proposed = JSON.parse(textOf(await w1.call("room_propose_learning", { title: "Warm up the GPU before timing", body: "First runs are 20% slower." })));
+    expect(proposed.status).toBe("pending review");
+    await waitFor(() => store.outboxSize() === 0, "outbox to drain");
+    expect(await search({ query: "warm" })).toEqual([]);
+    const leader = await client(ids.L);
+    expect(textOf(await leader.call("room_review_post", { postId: proposed.postId, decision: "approved" }))).toMatch(/approved/);
+    await waitFor(() => link.state!.memory[proposed.postId], "approved learning in memory");
+    expect(await search({ query: "warm" })).toEqual(["Warm up the GPU before timing"]);
   });
 
   it("rejects requests without the agent's secret", async () => {

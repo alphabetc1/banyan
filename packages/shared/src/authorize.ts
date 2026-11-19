@@ -104,6 +104,19 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       if (!wt) return `unknown worktree ${draft.payload.worktreeId}`;
       return agentOwnedByRunner(state, actor, wt.agentId);
     }
+    case "memory.recorded": {
+      if (actor.kind !== "member") return "only people record memory; agents propose learnings";
+      if (state.memory[draft.payload.entryId]) return `memory entry ${draft.payload.entryId} already exists`;
+      const source = draft.payload.sourcePostId;
+      return source === undefined || state.posts[source] ? null : `unknown post ${source}`;
+    }
+    case "memory.updated":
+    case "memory.retired": {
+      if (actor.kind !== "member") return "only people change memory";
+      const entry = state.memory[draft.payload.entryId];
+      if (!entry) return `unknown memory entry ${draft.payload.entryId}`;
+      return entry.retired ? "the memory entry has been retired" : null;
+    }
     case "approval.requested":
       if (state.approvals[draft.payload.approvalId]) return `approval ${draft.payload.approvalId} already exists`;
       return agentOwnedByRunner(state, actor, draft.payload.agentId);

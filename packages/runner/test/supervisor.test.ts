@@ -239,6 +239,25 @@ describe("Supervisor", () => {
     expect(leaderSpec.systemPrompt).toContain("You are an agent in a Banyan room");
     expect(leaderSpec.roomMcpUrl).toContain(t.agentId);
     expect(byAgent(t.agentId).sent[0]!.text).toContain("room_get_context");
+
+    // A directive recorded while they run reaches the coordinated agent, not the plain one;
+    // changing or retiring it does too, and other memory changes stay silent.
+    const notes = (id: string) => byAgent(id).sent.filter((m) => m.text.includes("standing directive"));
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [draft("memory.recorded", { entryId: "d1", kind: "directive", title: "Benchmark on H100 only", body: "" })]);
+    await waitFor(() => notes(t.agentId).length === 1, "the directive note");
+    expect(notes(t.agentId)[0]).toEqual({ text: "A person added a standing directive to the room's memory; always follow it:\n- Benchmark on H100 only", delivery: "fyi" });
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("memory.recorded", { entryId: "f1", kind: "fact", title: "a fact", body: "" }),
+      draft("memory.updated", { entryId: "d1", title: "Benchmark on H100 or H200", body: "" }),
+      draft("memory.retired", { entryId: "d1" }),
+    ]);
+    await waitFor(() => notes(t.agentId).length === 3, "the change and retirement notes");
+    expect(notes(t.agentId).map((m) => m.text.split("\n")[0])).toEqual([
+      "A person added a standing directive to the room's memory; always follow it:",
+      "A person changed a standing directive to the room's memory; always follow it:",
+      "A person retired this standing directive; it no longer applies:",
+    ]);
+    expect(notes(plainId)).toEqual([]);
   });
 
   it("does not start a plain managed agent without instructions", async () => {
