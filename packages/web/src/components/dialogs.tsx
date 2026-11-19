@@ -1,4 +1,4 @@
-// Creation dialogs (goal, group, agent) and the invite dialog.
+// Creation dialogs (goal, group, agent), renaming an agent, and the invite dialog.
 import { useEffect, useState } from "react";
 import { draft, isGoalWithin, newId, type Agent } from "@banyan/shared";
 import { createInvite } from "../api.ts";
@@ -7,7 +7,7 @@ import { inDesktopClient, installCommand, pickRepository } from "../desktop.tsx"
 import { useT } from "../i18n.ts";
 import { Dialog, useAction } from "./common.tsx";
 
-function Actions({ busy, error, onClose }: { busy: boolean; error: string | null; onClose: () => void }) {
+function Actions({ busy, error, onClose, submitLabel = "dialog.create" }: { busy: boolean; error: string | null; onClose: () => void; submitLabel?: "dialog.create" | "settings.save" }) {
   const t = useT();
   return (
     <>
@@ -17,7 +17,7 @@ function Actions({ busy, error, onClose }: { busy: boolean; error: string | null
           {t("dialog.cancel")}
         </button>
         <button className="primary" disabled={busy}>
-          {t("dialog.create")}
+          {t(submitLabel)}
         </button>
       </div>
     </>
@@ -255,6 +255,28 @@ export function NewAgentDialog({ goalId, onClose }: { goalId: string; onClose: (
           </details>
         )}
         <Actions busy={action.busy || myRunners.length === 0} error={action.error} onClose={onClose} />
+      </form>
+    </Dialog>
+  );
+}
+
+export function RenameAgentDialog({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+  const t = useT();
+  const store = useRoomStore();
+  const action = useAction();
+  const [name, setName] = useState(store.state!.agents[agentId]?.name ?? "");
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void action.run(() => store.append([draft("agent.renamed", { agentId, name: name.trim() })])).then((ok) => ok && onClose());
+  };
+  return (
+    <Dialog title={t("agent.renameTitle")} onClose={onClose}>
+      <form className="stack" onSubmit={submit}>
+        <label>
+          {t("dialog.agentName")}
+          <input required autoFocus maxLength={500} value={name} onChange={(e) => setName(e.target.value)} onFocus={(e) => e.target.select()} />
+        </label>
+        <Actions busy={action.busy || !name.trim()} error={action.error} onClose={onClose} submitLabel="settings.save" />
       </form>
     </Dialog>
   );

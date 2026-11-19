@@ -7,10 +7,10 @@ import { ContextMenu, ROLE_MARK, useNow, type MenuItem } from "../components/com
 import { KindIcon } from "../components/kind-icon.tsx";
 import { useSortable, type Drop } from "../components/sortable.tsx";
 import { StatusIcon } from "../components/status-icon.tsx";
-import { NewAgentDialog } from "../components/dialogs.tsx";
+import { NewAgentDialog, RenameAgentDialog } from "../components/dialogs.tsx";
 import { TagDialog } from "../components/tag-dialog.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentFolder, agentIcon, agentStatus, attentionItems, groupAgents, groupsInSubtree, inSavedOrder, standaloneAgentsInSubtree } from "../derive.ts";
+import { agentFolder, agentIcon, agentStatus, attentionItems, canManageAgent, groupAgents, groupsInSubtree, inSavedOrder, standaloneAgentsInSubtree } from "../derive.ts";
 import { useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { linkProps } from "../router.ts";
@@ -108,6 +108,7 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
   useEffect(() => saveBoard(store.roomId, board), [board]);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   // forAgent is an agent to put in the tag once it is created.
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [tagDialog, setTagDialog] = useState<{ tag: Tag | null; forAgent: string | null } | null>(null);
   const change = (f: (b: TagBoard) => TagBoard) => setBoard((b) => f(b));
 
@@ -135,7 +136,9 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
   };
   const agentMenu = (agent: Agent) => (e: MouseEvent) => {
     const current = tagOfAgent(board, agent.id);
+    const manage: MenuItem[] = canManageAgent(state, store.memberId, agent) ? [{ label: t("agent.renameMenu"), onSelect: () => setRenaming(agent.id) }, "separator"] : [];
     openMenu(e, [
+      ...manage,
       { heading: t("tags.moveTo") },
       ...board.tags.map((tag) => ({ label: tag.name, checked: tag.id === current?.id, onSelect: () => change((b) => setAgentTag(b, agent.id, tag.id)) })),
       { label: t("tags.newFromMenu"), onSelect: () => setTagDialog({ tag: null, forAgent: agent.id }) },
@@ -217,6 +220,7 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
       <section className="agent-detail">{selectedId ? <AgentPage agentId={selectedId} /> : <div className="panel faint">{t("overview.selectAgent")}</div>}</section>
       {creating && <NewAgentDialog goalId={state.room!.rootGoalId} onClose={() => setCreating(false)} />}
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+      {renaming && <RenameAgentDialog agentId={renaming} onClose={() => setRenaming(null)} />}
       {tagDialog && (
         <TagDialog
           initial={tagDialog.tag ? { name: tagDialog.tag.name, color: tagDialog.tag.color } : { name: "", color: nextColor(board) }}

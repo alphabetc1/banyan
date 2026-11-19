@@ -107,6 +107,8 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant("agent.archived", z.object({ agentId: Id })),
   // A person asks for a stopped agent to run again, resuming its session if it has one.
   variant("agent.restart_requested", z.object({ agentId: Id })),
+  // A person gives the agent another name; its session, worktree and branch stay as they are.
+  variant("agent.renamed", z.object({ agentId: Id, name: ShortText })),
   variant("agent.process_changed", z.object({ agentId: Id, process: ProcessState, detail: LongText.optional() })),
   variant("agent.activity_changed", z.object({ agentId: Id, activity: Activity })),
   variant("agent.resumability_changed", z.object({ agentId: Id, resumability: Resumability, detail: LongText.optional() })),

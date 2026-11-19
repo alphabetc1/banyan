@@ -37,6 +37,11 @@ export function agentIcon(state: RoomState, agent: Agent, onlineRunnerIds: strin
   return "starting";
 }
 
+// Whether a member may rename, restart or remove the agent: its owner or the room owner.
+export function canManageAgent(state: RoomState, memberId: string, agent: Agent): boolean {
+  return agent.memberId === memberId || state.members[memberId]?.role === "owner";
+}
+
 // Agents not removed; removed ones stay in the room's history only.
 export function activeAgents(state: RoomState): Agent[] {
   return Object.values(state.agents).filter((a) => !a.archived);

@@ -263,6 +263,11 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
       // Acted on by the agent's runner.
       touchAgent(state, e.payload.agentId, e.ts);
       break;
+    case "agent.renamed": {
+      const agent = touchAgent(state, e.payload.agentId, e.ts);
+      if (agent) agent.name = e.payload.name;
+      break;
+    }
     case "agent.session_bound": {
       const agent = touchAgent(state, e.payload.agentId, e.ts);
       if (agent) agent.providerSessionId = e.payload.providerSessionId;

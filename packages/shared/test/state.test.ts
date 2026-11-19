@@ -7,7 +7,7 @@ import {
   pendingApprovalCount,
   postReviewers,
   type Actor,
-  type EventDraft,
+  EventDraft,
   type RoomState,
 } from "../src/index.ts";
 
@@ -266,7 +266,7 @@ describe("authorize", () => {
   it("lets an agent's owner or the room owner remove or restart it, and frees a removed leader's place", () => {
     const r = seededRoom();
     // W2 belongs to Bob; Alice owns the room.
-    expect(r.submit(agent("W1"), draft("agent.restart_requested", { agentId: "W2" }))).toBe("only people may remove or restart agents");
+    expect(r.submit(agent("W1"), draft("agent.restart_requested", { agentId: "W2" }))).toBe("only people may remove, restart or rename agents");
     expect(r.submit(BOB, draft("agent.archived", { agentId: "W1" }))).toBe("only the agent's owner or the room owner may do this");
     r.must(BOB, draft("agent.restart_requested", { agentId: "W2" }));
     r.must(ALICE, draft("agent.archived", { agentId: "W2" }));
@@ -279,6 +279,21 @@ describe("authorize", () => {
     expect(r.state.groups["prefill-group"]).toMatchObject({ leaderAgentId: null, monitorAgentId: "M" });
     r.must(ALICE, draft("agent.created", { agentId: "L2", groupId: "prefill-group", runnerId: "runner-a", name: "new leader", role: "leader", provider: "claude", model: "default", goalId: "prefill", instructions: "" }));
     expect(r.state.groups["prefill-group"]!.leaderAgentId).toBe("L2");
+  });
+
+  it("lets an agent's owner or the room owner rename it, and nobody else", () => {
+    const r = seededRoom();
+    // W2 belongs to Bob; Alice owns the room.
+    r.must(BOB, draft("agent.renamed", { agentId: "W2", name: "tokenizer worker" }));
+    expect(r.state.agents.W2!.name).toBe("tokenizer worker");
+    r.must(ALICE, draft("agent.renamed", { agentId: "W2", name: "renamed by owner" }));
+    expect(r.state.agents.W2!.name).toBe("renamed by owner");
+    expect(r.submit(BOB, draft("agent.renamed", { agentId: "W1", name: "x" }))).toBe("only the agent's owner or the room owner may do this");
+    expect(r.submit(agent("W2"), draft("agent.renamed", { agentId: "W2", name: "x" }))).toBe("only people may remove, restart or rename agents");
+    // An empty name never reaches the room: the server rejects the event's shape.
+    expect(EventDraft.safeParse(draft("agent.renamed", { agentId: "W2", name: "" })).success).toBe(false);
+    r.must(ALICE, draft("agent.archived", { agentId: "W2" }));
+    expect(r.submit(ALICE, draft("agent.renamed", { agentId: "W2", name: "too late" }))).toBe("the agent has been removed");
   });
 
   it("lets leaders create goals only inside their subtree", () => {

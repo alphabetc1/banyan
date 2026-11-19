@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, authorize, draft, emptyRoomState, type Actor, type EventDraft, type RoomState } from "@banyan/shared";
-import { agentFolder, agentIcon, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, inSavedOrder, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
+import { agentFolder, agentIcon, canManageAgent, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, inSavedOrder, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
 import { MESSAGES, reasonText } from "../src/i18n.ts";
 
 const NOW = 2_000_000_000_000;
@@ -100,6 +100,15 @@ describe("derive", () => {
     const unknown = { kind: "review" as const, postId: "p", agentId: "gone", summary: "" };
     expect(ownAttention(s, "m1", [mine, theirs, unknown])).toEqual([mine]);
     expect(ownAttention(s, "m2", [mine, theirs, unknown])).toEqual([theirs]);
+  });
+
+  it("lets an agent's owner or the room owner manage it", () => {
+    const s = room();
+    s.members.m2 = { ...s.members.m1!, id: "m2", displayName: "Bob", role: "member" };
+    const own = { ...s.agents.w!, memberId: "m2" };
+    expect(canManageAgent(s, "m2", own)).toBe(true);
+    expect(canManageAgent(s, "m1", own)).toBe(true);
+    expect(canManageAgent(s, "m2", s.agents.l!)).toBe(false);
   });
 
   it("lists standalone agents in a goal's subtree, oldest first", () => {

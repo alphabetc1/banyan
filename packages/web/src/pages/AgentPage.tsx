@@ -4,11 +4,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { agentGroup, draft, goalPath, newId, type Delivery, type RoomEvent, type TranscriptEntry } from "@banyan/shared";
 import { fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "../api.ts";
 import { Dialog, timeAgo, useAction, useNow } from "../components/common.tsx";
+import { RenameAgentDialog } from "../components/dialogs.tsx";
 import { StatusIcon } from "../components/status-icon.tsx";
 import { useRoomStore } from "../contexts.ts";
 import { TerminalView } from "../components/terminal.tsx";
 import { useLocalRunnerIds } from "../desktop.tsx";
-import { actorName, agentIcon, agentStatus } from "../derive.ts";
+import { actorName, agentIcon, agentStatus, canManageAgent } from "../derive.ts";
 import { LanguageContext, useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
 import { navigate } from "../router.ts";
@@ -227,9 +228,10 @@ function AgentActions({ agentId }: { agentId: string }) {
   const store = useRoomStore();
   const action = useAction();
   const [confirming, setConfirming] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const state = store.state!;
   const agent = state.agents[agentId]!;
-  if (agent.memberId !== store.memberId && state.members[store.memberId]?.role !== "owner") return null;
+  if (!canManageAgent(state, store.memberId, agent)) return null;
   const stopped = agent.process === "exited" || agent.process === "crashed";
   const remove = () =>
     void action.run(() => store.append([draft("agent.archived", { agentId })])).then((ok) => {
@@ -245,9 +247,13 @@ function AgentActions({ agentId }: { agentId: string }) {
           {t("agent.restart")}
         </button>
       )}
+      <button className="ghost" disabled={action.busy} onClick={() => setRenaming(true)}>
+        {t("agent.rename")}
+      </button>
       <button className="ghost" disabled={action.busy} onClick={() => setConfirming(true)}>
         {t("agent.remove")}
       </button>
+      {renaming && <RenameAgentDialog agentId={agentId} onClose={() => setRenaming(false)} />}
       {confirming && (
         <Dialog title={t("agent.removeTitle")} onClose={() => setConfirming(false)}>
           <span>{t("agent.removeExplain")}</span>

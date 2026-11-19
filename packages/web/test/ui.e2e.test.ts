@@ -281,7 +281,7 @@ test("approves an agent's request, sends it a message and reads its live transcr
   expect((await serverState(room.roomId, room.token)).messages[messageId]!.deliveredAt).toEqual(expect.any(Number));
 });
 
-test("restarts a stopped agent and removes one after asking, only for its owner", async ({ page, browser }) => {
+test("renames, restarts and removes agents, only for their owner", async ({ page, browser }) => {
   const room = await createRoomInUi(page);
   const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
   const member = await socket(room.roomId, room.token);
@@ -297,6 +297,23 @@ test("restarts a stopped agent and removes one after asking, only for its owner"
   await page.getByRole("button", { name: "Start again" }).click();
   await expect.poll(async () => (await serverState(room.roomId, room.token)).agents[kept]!.lastEventAt).toBeGreaterThan(before);
 
+  // Renaming from the agent's header, then from the list's right-click menu; the session and
+  // everything else stay.
+  await page.getByRole("button", { name: "Rename" }).click();
+  await expect(page.getByLabel("Agent name")).toHaveValue("kept");
+  await page.getByLabel("Agent name").fill("  kept-renamed  ");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".agent-main h2")).toHaveText("kept-renamed");
+  await page.getByTestId("agent-row-kept-renamed").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await page.getByLabel("Agent name").fill("   ");
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await page.getByLabel("Agent name").fill("kept");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("agent-row-kept")).toBeVisible();
+  expect((await serverState(room.roomId, room.token)).agents[kept]).toMatchObject({ name: "kept", archived: false });
+
   await page.getByTestId("agent-row-gone").click();
   await page.getByRole("button", { name: "Remove" }).click();
   await expect(page.getByRole("dialog", { name: "Remove this agent?" })).toContainText("Its worktree and branch stay");
@@ -306,7 +323,7 @@ test("restarts a stopped agent and removes one after asking, only for its owner"
   await expect(page.getByTestId("agent-row-kept")).toBeVisible();
   expect((await serverState(room.roomId, room.token)).agents[gone]).toMatchObject({ archived: true });
 
-  // Someone else in the room sees the agent but cannot restart or remove it.
+  // Someone else in the room sees the agent but cannot rename, restart or remove it.
   const invite = await api(`/api/rooms/${room.roomId}/invites`, {}, room.token);
   const bob = await api(`/api/rooms/${room.roomId}/join`, { inviteToken: invite.inviteToken, displayName: "Bob" });
   const other = await browser.newContext();
@@ -319,6 +336,10 @@ test("restarts a stopped agent and removes one after asking, only for its owner"
   await guest.goto(`${base}/rooms/${room.roomId}/agents/${kept}`);
   await expect(guest.locator(".agent-main h2")).toHaveText("kept");
   await expect(guest.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  await expect(guest.getByRole("button", { name: "Rename" })).toHaveCount(0);
+  await guest.getByTestId("agent-row-kept").click({ button: "right" });
+  await expect(guest.getByRole("menuitem", { name: "New tag…" })).toBeVisible();
+  await expect(guest.getByRole("menuitem", { name: "Rename…" })).toHaveCount(0);
   await expect(guest.getByRole("button", { name: "Start again" })).toHaveCount(0);
   await other.close();
 });

@@ -72,11 +72,12 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       return null;
     }
     case "agent.archived":
-    case "agent.restart_requested": {
+    case "agent.restart_requested":
+    case "agent.renamed": {
       const agent = state.agents[draft.payload.agentId];
       if (!agent) return `unknown agent ${draft.payload.agentId}`;
       if (agent.archived) return "the agent has been removed";
-      if (actor.kind !== "member") return "only people may remove or restart agents";
+      if (actor.kind !== "member") return "only people may remove, restart or rename agents";
       if (agent.memberId !== actor.id && state.members[actor.id]?.role !== "owner") return "only the agent's owner or the room owner may do this";
       return null;
     }
