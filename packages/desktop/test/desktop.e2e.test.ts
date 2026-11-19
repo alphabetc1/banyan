@@ -667,6 +667,30 @@ test("runs a Claude agent in its own terminal inside the window, typed into like
   expect(saved).toHaveLength(1);
   expect(saved[0]).toMatch(/\.png$/);
 
+  // A fork from the list carries the conversation on, in a session and worktree of its own.
+  const sourceSession = (await agentState())!.providerSessionId;
+  await page.getByTestId("agent-row-term-agent").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Fork" }).click();
+  await expect(page.locator(".agent-main h2")).toHaveText("term-agent-fork");
+  const forkIcon = page.getByTestId("agent-row-term-agent-fork").locator("[data-icon]");
+  const forkTerminal = page.getByTestId("terminal");
+  // It opens on the conversation so far, on its own branch; its worktree belongs to a
+  // repository Claude Code already trusts, so it asks nothing.
+  await expect(forkTerminal).toContainText("TYPED-OK", { timeout: 60_000 });
+  await expect(forkTerminal).toContainText("term-agent-fork");
+  await expect(forkTerminal).not.toContainText(/trust this folder/i);
+  await expect(forkIcon).toHaveAttribute("data-icon", "done", { timeout: 60_000 });
+  await forkTerminal.click();
+  await page.keyboard.type("Which word did you reply with before? Reply with that word followed by -FORK and nothing else.");
+  await page.keyboard.press("Enter");
+  const fork = Object.values((await (await fetch(`${localBase}/api/rooms/${roomId}/state`, { headers: { authorization: `Bearer ${token}` } })).json() as { state: import("@banyan/shared").RoomState }).state.agents).find((a) => a.name === "term-agent-fork")!;
+  await waitFor(async () => (await localTranscript(localBase, roomId, fork.id, token)).some((e) => e.kind === "assistant" && e.text.includes("TYPED-OK-FORK")), "the fork remembering the conversation", 5 * 60_000, 1000);
+  expect((await agentState())!.providerSessionId).toBe(sourceSession);
+  expect(fork.providerSessionId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(fork.providerSessionId).not.toBe(sourceSession);
+  expect(fork.forkOf).toBe(agentId);
+  await page.getByTestId("agent-row-term-agent").click();
+
   // The next agent starts in the same repository, and a plain terminal runs the person's shell.
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByLabel(/^Folder on the runner's machine/)).toHaveValue(repo);

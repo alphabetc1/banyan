@@ -296,6 +296,29 @@ describe("authorize", () => {
     expect(r.submit(ALICE, draft("agent.renamed", { agentId: "W2", name: "too late" }))).toBe("the agent has been removed");
   });
 
+  it("forks a terminal agent with a session, on its runner with the same CLI, as a worker", () => {
+    const r = seededRoom();
+    const base = { groupId: null, runnerId: "runner-a", role: "worker" as const, provider: "claude" as const, model: "default", goalId: "perf", instructions: "", terminal: true };
+    r.must(ALICE, draft("agent.created", { ...base, agentId: "T", name: "term" }));
+    const fork = (p: Partial<Extract<EventDraft, { type: "agent.created" }>["payload"]> & { agentId: string; forkOf: string }) => draft("agent.created", { ...base, name: "term-fork", ...p });
+    expect(r.submit(ALICE, fork({ agentId: "F0", forkOf: "T" }))).toBe("the agent has no session to fork yet");
+    r.must(ALICE_RUNNER, draft("agent.session_bound", { agentId: "T", providerSessionId: "s-1" }));
+    expect(r.submit(ALICE, fork({ agentId: "F1", forkOf: "nobody" }))).toBe("unknown agent nobody");
+    expect(r.submit(ALICE, fork({ agentId: "F2", forkOf: "T", provider: "codex" }))).toBe("a fork runs on its agent's runner with the same CLI");
+    expect(r.submit(BOB, fork({ agentId: "F3", forkOf: "T", runnerId: "runner-b" }))).toBe("a fork runs on its agent's runner with the same CLI");
+    expect(r.submit(ALICE, fork({ agentId: "F4", forkOf: "T", terminal: false }))).toBe("only terminal agents can be forked");
+    expect(r.submit(ALICE, fork({ agentId: "F7", forkOf: "T", role: "leader" }))).toBe("a fork is a worker");
+    r.must(ALICE, fork({ agentId: "F", forkOf: "T" }));
+    expect(r.state.agents.F).toMatchObject({ forkOf: "T", providerSessionId: null, name: "term-fork" });
+    // A managed agent has no terminal session to copy.
+    r.must(ALICE, draft("agent.created", { ...base, agentId: "M2", name: "managed", terminal: false }));
+    r.must(ALICE_RUNNER, draft("agent.session_bound", { agentId: "M2", providerSessionId: "s-2" }));
+    expect(r.submit(ALICE, fork({ agentId: "F5", forkOf: "M2" }))).toBe("only terminal agents can be forked");
+    // A removed agent cannot be forked.
+    r.must(ALICE, draft("agent.archived", { agentId: "T" }));
+    expect(r.submit(ALICE, fork({ agentId: "F6", forkOf: "T" }))).toBe("unknown agent T");
+  });
+
   it("lets leaders create goals only inside their subtree", () => {
     const r = seededRoom();
     r.must(agent("L"), draft("goal.created", { goalId: "kv", parentId: "prefill", title: "kv", description: "" }));

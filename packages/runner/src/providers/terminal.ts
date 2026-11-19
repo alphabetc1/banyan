@@ -86,7 +86,11 @@ function claudeProfile(permissionMode: PermissionMode | undefined): CliProfile {
         ...(spec.model === DEFAULT_MODEL ? [] : ["--model", spec.model]),
         ...(permissionMode ? ["--permission-mode", permissionMode] : []),
         ...extraArgs,
-        ...(spec.resumeSessionId ? ["--resume", spec.resumeSessionId] : ["--session-id", sessionId!]),
+        ...(spec.resumeSessionId
+          ? ["--resume", spec.resumeSessionId]
+          : spec.forkSessionId
+            ? ["--resume", spec.forkSessionId, "--fork-session", "--session-id", sessionId!]
+            : ["--session-id", sessionId!]),
         ...(initialPrompt ? [initialPrompt] : []),
       ];
     },
@@ -114,18 +118,21 @@ function codexProfile(): CliProfile {
         // Room tools never need a person, as in managed sessions.
         ...(spec.roomMcpUrl ? [`mcp_servers.room.url=${toml(spec.roomMcpUrl)}`, `mcp_servers.room.default_tools_approval_mode="approve"`] : []),
         ...(spec.systemPrompt ? [`developer_instructions=${toml(spec.systemPrompt)}`] : []),
+        // A fork runs in a worktree of its own: without this Codex asks whether to use the
+        // forked session's directory instead, which is the other agent's worktree.
+        ...(spec.forkSessionId && !spec.resumeSessionId ? [`tui.resume_cwd="current"`] : []),
       ];
       return [
-        ...(spec.resumeSessionId ? ["resume"] : []),
+        ...(spec.resumeSessionId ? ["resume"] : spec.forkSessionId ? ["fork"] : []),
         ...config.flatMap((c) => ["-c", c]),
         ...(spec.model === DEFAULT_MODEL ? [] : ["-m", spec.model]),
         ...extraArgs,
-        ...(spec.resumeSessionId ? [spec.resumeSessionId] : []),
+        ...(spec.resumeSessionId ? [spec.resumeSessionId] : spec.forkSessionId ? [spec.forkSessionId] : []),
         ...(initialPrompt ? [initialPrompt] : []),
       ];
     },
     env: ({ hookUrl }) => ({ BANYAN_HOOK_URL: hookUrl }),
-    blockingQuestions: [/trustthisfolder/i, /hooksn?eedreview/i, /updatenow/i],
+    blockingQuestions: [/trustthisfolder/i, /hooksn?eedreview/i, /updatenow/i, /usesessiondirectory/i],
   };
 }
 

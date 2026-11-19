@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvent, authorize, draft, emptyRoomState, type Actor, type EventDraft, type RoomState } from "@banyan/shared";
-import { agentFolder, agentIcon, canManageAgent, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, inSavedOrder, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
+import { agentFolder, agentIcon, canForkAgent, canManageAgent, agentStatus, attentionItems, attentionKey, goalTree, groupAgents, groupsInSubtree, inSavedOrder, latestPost, ownAttention, postColumn, standaloneAgentsInSubtree } from "../src/derive.ts";
 import { MESSAGES, reasonText } from "../src/i18n.ts";
 
 const NOW = 2_000_000_000_000;
@@ -109,6 +109,18 @@ describe("derive", () => {
     expect(canManageAgent(s, "m2", own)).toBe(true);
     expect(canManageAgent(s, "m1", own)).toBe(true);
     expect(canManageAgent(s, "m2", s.agents.l!)).toBe(false);
+  });
+
+  it("lets the runner's owner fork a terminal agent that has a session", () => {
+    const s = room();
+    const term = { ...s.agents.w!, terminal: true, providerSessionId: "s-1" };
+    expect(canForkAgent(s, "m1", term)).toBe(true);
+    // Its runner belongs to m1, so nobody else holds the session.
+    expect(canForkAgent(s, "m2", term)).toBe(false);
+    expect(canForkAgent(s, "m1", { ...term, providerSessionId: null })).toBe(false);
+    expect(canForkAgent(s, "m1", { ...term, terminal: false })).toBe(false);
+    expect(canForkAgent(s, "m1", { ...term, provider: "shell" })).toBe(false);
+    expect(canForkAgent(s, "m1", { ...term, archived: true })).toBe(false);
   });
 
   it("lists standalone agents in a goal's subtree, oldest first", () => {

@@ -13,6 +13,8 @@ export interface SessionSpec {
   // Room MCP endpoint whose URL path binds this agent's identity; null for a plain agent.
   roomMcpUrl: string | null;
   resumeSessionId: string | null;
+  // For a new session of a terminal agent: another session to start as a copy of.
+  forkSessionId: string | null;
 }
 
 export interface SessionCallbacks {

@@ -94,6 +94,7 @@ async function setup(script: Script, opts: { createAgent?: boolean; store?: Loca
     store,
     mcp,
     providers: { claude: provider, codex: provider },
+    terminals: { claude: provider, codex: provider, shell: provider },
     log,
     state: () => link.state!,
     emit: (d, a = null) => link.emit(d, a),
@@ -176,6 +177,45 @@ describe("Supervisor", () => {
     expect(Object.values(state.worktrees).find((w) => w.agentId === workerId)!.diffStat).toEqual({ files: 1, insertions: 1, deletions: 0 });
     expect(execFileSync("git", ["branch", "-a", "--list", "*banyan*"], { cwd: repo, encoding: "utf8" })).not.toContain("remotes/");
     expect(execFileSync("git", ["ls-remote", "--heads", remote], { encoding: "utf8" })).not.toContain("banyan/");
+    expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
+  });
+
+  it("forks a terminal agent: a copy of its session, in a worktree carrying its uncommitted changes", async () => {
+    const repo = join(tempDir("fork-repo"), "repo");
+    execFileSync("git", ["clone", "-q", createFork(), repo]);
+    const t = await setup({}, { createAgent: false, repoUrl: null, personal: true });
+    const sourceId = newId();
+    const common = { groupId: null, runnerId: t.room.runnerId, role: "worker" as const, provider: "claude" as const, model: "default", goalId: t.room.rootGoalId, instructions: "", terminal: true, repoPath: repo };
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [draft("agent.created", { ...common, agentId: sourceId, name: "source" })]);
+    await t.supervisor.start();
+    const sourceSession = await waitFor(async () => (await t.serverState()).agents[sourceId]?.providerSessionId, "source session");
+    // The source has committed work and uncommitted changes on top.
+    const source = t.store.worktree(sourceId)!;
+    writeFileSync(join(source.path, "done.txt"), "committed\n");
+    execFileSync("git", ["add", "."], { cwd: source.path });
+    execFileSync("git", ["-c", "user.name=me", "-c", "user.email=me@example.com", "commit", "-qm", "done"], { cwd: source.path });
+    writeFileSync(join(source.path, "wip.txt"), "uncommitted\n");
+    const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source.path, encoding: "utf8" }).trim();
+
+    const forkId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [draft("agent.created", { ...common, agentId: forkId, name: "source-fork", forkOf: sourceId })]);
+    await waitFor(async () => (await t.serverState()).agents[forkId]?.process === "running", "fork running");
+    const spec = t.provider.specs.find((s) => s.agentId === forkId)!;
+    expect(spec).toMatchObject({ forkSessionId: sourceSession, resumeSessionId: null });
+    const fork = t.store.worktree(forkId)!;
+    expect(spec.cwd).toBe(fork.path);
+    expect(fork.baseSha).toBe(sourceHead);
+    expect(readFileSync(join(fork.path, "done.txt"), "utf8")).toBe("committed\n");
+    expect(readFileSync(join(fork.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
+    // It waits for its person instead of being told anything, and gets a session of its own.
+    expect(t.provider.sessions[t.provider.specs.indexOf(spec)]!.sent).toEqual([]);
+    const state = await t.serverState();
+    expect(state.agents[forkId]!.providerSessionId).not.toBeNull();
+    expect(state.agents[forkId]!.providerSessionId).not.toBe(sourceSession);
+    const transcript = await t.server.transcript(t.room.roomId, forkId, t.room.memberToken);
+    expect(transcript.map((e) => e.text)).toContain("forked from source");
+    // The source carries on untouched.
+    expect(readFileSync(join(source.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
     expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
   });
 

@@ -9,7 +9,7 @@ import type { Logger } from "./logger.ts";
 import { freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
-import { commitAll, createWorktree, ensureClone, hasCommit, pushBranch, worktreeStatus } from "./worktree.ts";
+import { commitAll, copyUncommittedChanges, createWorktree, ensureClone, git, hasCommit, pushBranch, worktreeStatus } from "./worktree.ts";
 
 const TRANSCRIPT_BATCH_MAX = 200;
 const CRASH_RESTART_DELAY_MS = 5000;
@@ -158,14 +158,17 @@ export class Supervisor {
     const known = this.opts.store.worktree(agent.id);
     if (known) return known.path;
     const room = this.opts.state().room!;
+    // A fork starts where its agent is now, uncommitted changes included.
+    const source = agent.forkOf ? this.opts.store.worktree(agent.forkOf) : undefined;
     const wt = await createWorktree({
       repoDir,
       path: join(this.opts.roomDir, "worktrees", agent.id),
       // A local repository starts from whatever is checked out there.
-      baseRef: agent.repoPath ? "HEAD" : `origin/${room.baseBranch}`,
+      baseRef: source ? await git(source.path, ["rev-parse", "HEAD"]) : agent.repoPath ? "HEAD" : `origin/${room.baseBranch}`,
       roomShort: room.id.slice(-6).toLowerCase(),
       agentName: agent.name,
     });
+    if (source) await copyUncommittedChanges(source.path, wt.path);
     this.opts.store.saveWorktree({ agentId: agent.id, ...wt });
     this.opts.emit([draft("worktree.created", { worktreeId: newId(), agentId: agent.id, branch: wt.branch, baseSha: wt.baseSha })]);
     return wt.path;
@@ -201,8 +204,11 @@ export class Supervisor {
       const resumeId = agent.providerSessionId;
       const state = this.opts.state();
       const plain = isPlainAgent(state, agent);
+      // A fork's first session starts as a copy of its agent's, and waits for its person.
+      const forkId = resumeId === null && agent.forkOf ? (state.agents[agent.forkOf]?.providerSessionId ?? null) : null;
       try {
-        await this.launch(agent, cwd, resumeId, plain ? plainFirstMessage(agent, resumeId !== null) : resumeId ? RESUMED_MESSAGE : kickoffMessage(state, agent));
+        if (forkId) await this.launch(agent, cwd, null, null, forkId);
+        else await this.launch(agent, cwd, resumeId, plain ? plainFirstMessage(agent, resumeId !== null) : resumeId ? RESUMED_MESSAGE : kickoffMessage(state, agent));
       } catch (e) {
         if (!resumeId) throw e;
         const reason = (e as Error).message;
@@ -222,13 +228,15 @@ export class Supervisor {
     }
   }
 
-  private async launch(agent: Agent, cwd: string, resumeSessionId: string | null, firstMessage: string | null): Promise<void> {
+  private async launch(agent: Agent, cwd: string, resumeSessionId: string | null, firstMessage: string | null, forkSessionId: string | null = null): Promise<void> {
     const agentId = agent.id;
     const state = this.opts.state();
     let markExited!: () => void;
     const exited = new Promise<void>((resolve) => (markExited = resolve));
     const run: Running = { session: null as unknown as AgentSession, ready: false, exited, earlyExit: null, activity: null, sessionId: null };
-    this.appendTranscript(agentId, [{ kind: "system", text: resumeSessionId ? "resuming session" : "starting session", ts: Date.now() }]);
+    const forkedFrom = agent.forkOf ? state.agents[agent.forkOf]?.name : undefined;
+    const opening = resumeSessionId ? "resuming session" : forkSessionId ? `forked from ${forkedFrom ?? "another agent"}` : "starting session";
+    this.appendTranscript(agentId, [{ kind: "system", text: opening, ts: Date.now() }]);
     if (firstMessage === null && !agent.terminal) throw new Error("a managed agent needs instructions to start with; add instructions or run it in a terminal");
     const provider = this.providerFor(agent);
     run.session = provider.start(
@@ -240,6 +248,7 @@ export class Supervisor {
         systemPrompt: isPlainAgent(state, agent) ? null : systemPrompt(state, agent),
         roomMcpUrl: isPlainAgent(state, agent) ? null : this.opts.mcp.urlFor(agentId),
         resumeSessionId,
+        forkSessionId,
       },
       {
         onSessionId: (id) => {

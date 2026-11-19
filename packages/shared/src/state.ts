@@ -78,6 +78,8 @@ export interface Agent {
   repoPath: string | null;
   // Runs in the provider's own terminal UI; see agent.created.
   terminal: boolean;
+  // The agent whose session and worktree this one started from; see agent.created.
+  forkOf: string | null;
   // Removed by a person; kept for history but no longer run or listed.
   archived: boolean;
   providerSessionId: string | null;
@@ -232,6 +234,7 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         instructions: p.instructions,
         repoPath: p.repoPath ?? null,
         terminal: p.terminal ?? false,
+        forkOf: p.forkOf ?? null,
         archived: false,
         providerSessionId: null,
         process: "unknown",

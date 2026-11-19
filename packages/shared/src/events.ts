@@ -100,6 +100,9 @@ export const EventDraft = z.discriminatedUnion("type", [
       repoPath: z.string().min(1).max(1000).optional(),
       // Runs the provider's own interactive terminal UI instead of a managed session.
       terminal: z.boolean().optional(),
+      // Starts as a copy of this agent's session (and of its worktree, changes included),
+      // then goes its own way.
+      forkOf: Id.optional(),
     }),
   ),
   variant("agent.session_bound", z.object({ agentId: Id, providerSessionId: Id })),

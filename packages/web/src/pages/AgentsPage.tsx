@@ -1,19 +1,19 @@
 // Room overview: every agent in a list on the left with its status, sorted into the person's
 // own tags, and the selected agent's conversation on the right.
-import { useEffect, useState, type MouseEvent } from "react";
-import { newId, pendingApprovalCount, type Agent, type RoomState } from "@banyan/shared";
+import { useRef, useState, type MouseEvent } from "react";
+import { draft, newId, pendingApprovalCount, type Agent, type RoomState } from "@banyan/shared";
 import { AttentionInbox } from "../components/attention.tsx";
-import { ContextMenu, ROLE_MARK, useNow, type MenuItem } from "../components/common.tsx";
+import { ContextMenu, ROLE_MARK, useAction, useNow, type MenuItem } from "../components/common.tsx";
 import { KindIcon } from "../components/kind-icon.tsx";
 import { useSortable, type Drop } from "../components/sortable.tsx";
 import { StatusIcon } from "../components/status-icon.tsx";
 import { NewAgentDialog, RenameAgentDialog } from "../components/dialogs.tsx";
 import { TagDialog } from "../components/tag-dialog.tsx";
 import { useRoomStore } from "../contexts.ts";
-import { agentFolder, agentIcon, agentStatus, attentionItems, canManageAgent, groupAgents, groupsInSubtree, inSavedOrder, standaloneAgentsInSubtree } from "../derive.ts";
+import { agentFolder, agentIcon, agentStatus, attentionItems, canForkAgent, canManageAgent, groupAgents, groupsInSubtree, inSavedOrder, standaloneAgentsInSubtree } from "../derive.ts";
 import { useReasonText, useT } from "../i18n.ts";
 import { useRoomVersion } from "../room-store.ts";
-import { linkProps } from "../router.ts";
+import { linkProps, navigate } from "../router.ts";
 import { addTag, loadBoard, nextColor, placeNear, removeTag, saveBoard, setAgentTag, tagOfAgent, tagSections, updateTag, type Tag, type TagBoard } from "../tags.ts";
 import { AgentPage } from "./AgentPage.tsx";
 
@@ -105,12 +105,19 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
   const state = store.state!;
   const [order, setOrder] = useState(() => loadOrder(store.roomId));
   const [board, setBoard] = useState(() => loadBoard(store.roomId));
-  useEffect(() => saveBoard(store.roomId, board), [board]);
+  // The latest board, for menu actions chosen after it changed.
+  const latestBoard = useRef(board);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   // forAgent is an agent to put in the tag once it is created.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [tagDialog, setTagDialog] = useState<{ tag: Tag | null; forAgent: string | null } | null>(null);
-  const change = (f: (b: TagBoard) => TagBoard) => setBoard((b) => f(b));
+  // Saved at once, so a change survives the page going away right after it.
+  const change = (f: (b: TagBoard) => TagBoard) => {
+    const next = f(latestBoard.current);
+    latestBoard.current = next;
+    setBoard(next);
+    saveBoard(store.roomId, next);
+  };
 
   const agents = inSavedOrder(defaultOrder(state), order);
   const sections = tagSections(agents, board);
@@ -136,14 +143,47 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
   };
   const agentMenu = (agent: Agent) => (e: MouseEvent) => {
     const current = tagOfAgent(board, agent.id);
-    const manage: MenuItem[] = canManageAgent(state, store.memberId, agent) ? [{ label: t("agent.renameMenu"), onSelect: () => setRenaming(agent.id) }, "separator"] : [];
+    const manage: MenuItem[] = [
+      ...(canManageAgent(state, store.memberId, agent) ? [{ label: t("agent.renameMenu"), onSelect: () => setRenaming(agent.id) }] : []),
+      ...(canForkAgent(state, store.memberId, agent) ? [{ label: t("agent.fork"), onSelect: () => fork(agent) }] : []),
+    ];
     openMenu(e, [
       ...manage,
+      ...(manage.length > 0 ? ["separator" as const] : []),
       { heading: t("tags.moveTo") },
       ...board.tags.map((tag) => ({ label: tag.name, checked: tag.id === current?.id, onSelect: () => change((b) => setAgentTag(b, agent.id, tag.id)) })),
       { label: t("tags.newFromMenu"), onSelect: () => setTagDialog({ tag: null, forAgent: agent.id }) },
       ...(current ? ["separator" as const, { label: t("tags.removeFrom"), onSelect: () => change((b) => setAgentTag(b, agent.id, null)) }] : []),
     ]);
+  };
+  // A copy of the agent, listed right below it in the same tag, and opened.
+  const forking = useAction();
+  const fork = (agent: Agent) => {
+    const agentId = newId();
+    void forking.run(async () => {
+      await store.append([
+        draft("agent.created", {
+          agentId,
+          groupId: agent.groupId,
+          runnerId: agent.runnerId,
+          name: `${agent.name}-fork`,
+          role: "worker",
+          provider: agent.provider,
+          model: agent.model,
+          goalId: agent.goalId,
+          instructions: agent.instructions,
+          terminal: true,
+          ...(agent.repoPath ? { repoPath: agent.repoPath } : {}),
+          forkOf: agent.id,
+        }),
+      ]);
+      const next = placeNear([...agents.map((a) => a.id), agentId], agentId, agent.id, true);
+      setOrder(next);
+      saveOrder(store.roomId, next);
+      const tag = tagOfAgent(board, agent.id);
+      if (tag) change((b) => setAgentTag(b, agentId, tag.id));
+      navigate(`/rooms/${store.roomId}/agents/${agentId}`);
+    });
   };
   const tagMenu = (tag: Tag) => (e: MouseEvent) =>
     openMenu(e, [
@@ -170,6 +210,7 @@ export function AgentsPage({ agentId }: { agentId?: string }) {
             {t("overview.newAgent")}
           </button>
         </div>
+        {forking.error && <span className="error">{forking.error}</span>}
         {attention.length > 0 && <AttentionInbox items={attention} state={state} />}
         {agents.length === 0 && <div className="faint">{t("overview.noAgents")}</div>}
         {sections.map(({ tag, agents: members }) => {

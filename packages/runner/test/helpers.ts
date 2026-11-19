@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { newId, type AppendResult, type EventDraft, type RoomState, type ServerMessage } from "@banyan/shared";
+import { newId, type AppendResult, type EventDraft, type RoomState, type ServerMessage, type TranscriptEntry } from "@banyan/shared";
 import { buildApp } from "@banyan/server/app";
 
 export function tempDir(prefix: string): string {
@@ -67,6 +67,13 @@ export class TestServer {
   async state(roomId: string, token: string): Promise<RoomState> {
     const res = await fetch(`${this.base}/api/rooms/${roomId}/state`, { headers: { authorization: `Bearer ${token}` } });
     return ((await res.json()) as { state: RoomState }).state;
+  }
+
+  // An agent's latest transcript entries, oldest first.
+  async transcript(roomId: string, agentId: string, token: string): Promise<TranscriptEntry[]> {
+    const res = await fetch(`${this.base}/api/rooms/${roomId}/agents/${agentId}/transcript?limit=200`, { headers: { authorization: `Bearer ${token}` } });
+    const { events } = (await res.json()) as { events: { payload: { entries: TranscriptEntry[] } }[] };
+    return [...events].reverse().flatMap((e) => e.payload.entries);
   }
 }
 

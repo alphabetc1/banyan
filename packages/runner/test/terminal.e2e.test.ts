@@ -112,7 +112,7 @@ describe("Claude Code in a terminal", () => {
     expect(log.lines.filter((l) => l.level === "error")).toEqual([]);
   });
 
-  it("runs plain Codex in its terminal: first-time trust questions once, hooks, and resume", { timeout: 15 * 60_000 }, async () => {
+  it("runs plain Codex in its terminal: first-time trust questions once, hooks, resume and fork", { timeout: 15 * 60_000 }, async () => {
     // A Codex home of its own, so the folder and hook trust this test grants stay out of the
     // person's ~/.codex; only the login is copied in.
     const codexHome = mkdtempSync(join(tmpdir(), "banyan-codex-home-"));
@@ -200,6 +200,34 @@ describe("Claude Code in a terminal", () => {
     await waitFor(async () => (await transcript()).some((e) => e.kind === "assistant" && e.text.includes("MESSAGE-OK")), "the waiting message after the turn", STEP_TIMEOUT_MS, 1000);
     expect((await state()).messages[messageId]!.deliveredAt).toEqual(expect.any(Number));
     expect((await agent())!.providerSessionId).toBe(sessionId);
+
+    // A fork continues the same conversation in a session and worktree of its own.
+    const forkId = newId();
+    await appendAsMember(server, room.roomId, room.memberToken, [
+      draft("agent.created", { agentId: forkId, groupId: null, runnerId: room.runnerId, name: "codex-term-fork", role: "worker", provider: "codex", model: "default", goalId: room.rootGoalId, instructions: "", terminal: true, forkOf: agentId }),
+    ]);
+    const forkAgent = async () => (await state()).agents[forkId];
+    const forkScreen = () => plain(runner.terminal(forkId)?.attach(() => {}).backlog ?? "").replace(/\s/g, "");
+    await waitFor(async () => (await forkAgent())?.process === "running", "the fork running", STEP_TIMEOUT_MS, 500);
+    // It runs in its own worktree without asking which directory to use, and the hook stays
+    // trusted.
+    await waitFor(async () => (await forkAgent())?.activity === "idle" && /AskCodex/i.test(forkScreen()), "the fork at its prompt", STEP_TIMEOUT_MS, 500);
+    expect(/hooksn?eedreview|usesessiondirectory|trustthisfolder/i.test(forkScreen())).toBe(false);
+    if (/updatenow/i.test(forkScreen())) runner.terminal(forkId)!.write("\x1b[B\r");
+    await new Promise((r) => setTimeout(r, 1000));
+    runner.terminal(forkId)!.write("\x1b[200~Which word did you reply with first? Reply with that word followed by -FORK.\x1b[201~");
+    await new Promise((r) => setTimeout(r, 400));
+    runner.terminal(forkId)!.write("\r");
+    const forkTranscript = () => server.transcript(room.roomId, forkId, room.memberToken);
+    await waitFor(async () => (await forkTranscript()).some((e) => e.kind === "assistant" && e.text.includes("PLAIN-OK-FORK")), "the fork remembering the conversation", STEP_TIMEOUT_MS, 1000).catch(async (e: Error) => {
+      // What the fork shows and did, so a timeout explains itself.
+      throw new Error(`${e.message}: ${JSON.stringify({ agent: await forkAgent(), screen: forkScreen().slice(-1500), transcript: (await forkTranscript()).slice(-8) })}`);
+    });
+    const forkSession = (await forkAgent())!.providerSessionId;
+    expect(forkSession).toMatch(/^[0-9a-f-]{36}$/);
+    expect(forkSession).not.toBe(sessionId);
+    expect((await agent())!.providerSessionId).toBe(sessionId);
+    expect((await forkTranscript()).map((e) => e.text)).toContain("forked from codex-term");
     expect(log.lines.filter((l) => l.level === "error")).toEqual([]);
   });
 });

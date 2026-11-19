@@ -462,6 +462,40 @@ test("sorts agents into the person's own tags, moves them between tags and keeps
   await expect.poll(() => namesIn("untagged-agents")).toEqual(["two", "one"]);
 });
 
+test("forks a terminal agent from the list into a new agent right below it, in its tag", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const [source, other] = [newId(), newId()];
+  const common = { groupId: null, runnerId: runner.runnerId, role: "worker" as const, provider: "codex" as const, model: "default", goalId: room.rootGoalId, instructions: "", terminal: true, repoPath: "/tmp/fork-repo" };
+  await member.append([draft("agent.created", { ...common, agentId: source, name: "explorer" }), draft("agent.created", { ...common, agentId: other, name: "other" })]);
+  const names = () => page.locator(".agent-row .name").allTextContents();
+  await expect.poll(names).toEqual(["explorer", "other"]);
+  // Without a session there is nothing to copy yet.
+  await page.getByTestId("agent-row-explorer").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Fork" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  const r = await socket(room.roomId, runner.runnerToken);
+  await r.append([draft("agent.session_bound", { agentId: source, providerSessionId: "codex-session-1" })]);
+
+  // In a tag, the fork joins that tag right below its agent, and opens.
+  await page.getByTestId("agent-row-explorer").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New tag…" }).click();
+  await page.getByLabel("Tag name").fill("ideas");
+  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByTestId("agent-row-explorer").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Fork" }).click();
+  await expect(page.locator(".agent-main h2")).toHaveText("explorer-fork");
+  await expect.poll(() => page.getByTestId("tag-ideas").locator(".agent-row .name").allTextContents()).toEqual(["explorer", "explorer-fork"]);
+  const state = await serverState(room.roomId, room.token);
+  const fork = Object.values(state.agents).find((a) => a.name === "explorer-fork")!;
+  expect(fork).toMatchObject({ forkOf: source, provider: "codex", terminal: true, repoPath: "/tmp/fork-repo", role: "worker", runnerId: runner.runnerId, providerSessionId: null });
+  await expect(page).toHaveURL(`${base}/rooms/${room.roomId}/agents/${fork.id}`);
+  // The arrangement survives a reload.
+  await page.reload();
+  await expect.poll(names).toEqual(["explorer", "explorer-fork", "other"]);
+});
+
 test("shows an error instead of loading forever when saved credentials are rejected", async ({ page }) => {
   const { roomId } = await createRoomInUi(page);
   await page.evaluate(() => {

@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { commitAll, createWorktree, ensureClone, git, pushBranch, worktreeStatus } from "../src/worktree.ts";
+import { commitAll, copyUncommittedChanges, createWorktree, ensureClone, git, pushBranch, worktreeStatus } from "../src/worktree.ts";
 import { createFork, tempDir } from "./helpers.ts";
 
 const COMMIT = ["-c", "user.name=agent", "-c", "user.email=agent@example.com", "commit"];
@@ -24,6 +24,40 @@ describe("worktrees", () => {
     expect(b.branch).toBe("banyan/abc123/prefill-worker-2");
     expect(a.baseSha).toBe(await git(repoDir, ["rev-parse", "origin/main"]));
     expect(await git(a.path, ["branch", "--show-current"])).toBe(a.branch);
+  });
+
+  it("copies a worktree's uncommitted changes onto a new worktree at the same commit", async () => {
+    const { roomDir, repoDir } = await setup();
+    const source = await createWorktree({ repoDir, path: join(roomDir, "wt", "source"), baseRef: "origin/main", roomShort: "r", agentName: "source" });
+    // Committed work, then staged, unstaged, deleted and untracked changes on top.
+    writeFileSync(join(source.path, "kept.txt"), "committed\n");
+    writeFileSync(join(source.path, "gone.txt"), "to delete\n");
+    execFileSync("git", ["add", "-A"], { cwd: source.path, stdio: "pipe" });
+    execFileSync("git", [...COMMIT, "-m", "work"], { cwd: source.path, stdio: "pipe" });
+    writeFileSync(join(source.path, "kept.txt"), "committed\nstaged\n");
+    execFileSync("git", ["add", "kept.txt"], { cwd: source.path, stdio: "pipe" });
+    writeFileSync(join(source.path, "kept.txt"), "committed\nstaged\nunstaged\n");
+    execFileSync("git", ["rm", "-q", "gone.txt"], { cwd: source.path, stdio: "pipe" });
+    mkdirSync(join(source.path, "new", "deep"), { recursive: true });
+    writeFileSync(join(source.path, "new", "deep", "script.sh"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
+    writeFileSync(join(source.path, "blob.bin"), Buffer.from([0, 1, 2, 255]));
+
+    const head = await git(source.path, ["rev-parse", "HEAD"]);
+    const fork = await createWorktree({ repoDir, path: join(roomDir, "wt", "fork"), baseRef: head, roomShort: "r", agentName: "source fork" });
+    await copyUncommittedChanges(source.path, fork.path);
+    expect(readFileSync(join(fork.path, "kept.txt"), "utf8")).toBe("committed\nstaged\nunstaged\n");
+    expect(existsSync(join(fork.path, "gone.txt"))).toBe(false);
+    expect(readFileSync(join(fork.path, "new", "deep", "script.sh"), "utf8")).toBe("#!/bin/sh\necho hi\n");
+    expect(statSync(join(fork.path, "new", "deep", "script.sh")).mode & 0o777).toBe(0o755);
+    expect([...readFileSync(join(fork.path, "blob.bin"))]).toEqual([0, 1, 2, 255]);
+    // The source is left as it was.
+    expect(readFileSync(join(source.path, "kept.txt"), "utf8")).toBe("committed\nstaged\nunstaged\n");
+    expect(await git(source.path, ["diff", "--cached", "--name-only"])).toContain("kept.txt");
+    // Nothing to copy is fine.
+    const clean = await createWorktree({ repoDir, path: join(roomDir, "wt", "clean"), baseRef: head, roomShort: "r", agentName: "clean" });
+    const again = await createWorktree({ repoDir, path: join(roomDir, "wt", "again"), baseRef: head, roomShort: "r", agentName: "again" });
+    await copyUncommittedChanges(clean.path, again.path);
+    expect(await git(again.path, ["status", "--porcelain"])).toBe("");
   });
 
   it("fetches instead of cloning again", async () => {

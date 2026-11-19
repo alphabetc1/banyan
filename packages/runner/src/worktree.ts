@@ -1,8 +1,9 @@
 // Git operations for agent worktrees. Branches are never deleted or overwritten:
 // name collisions get a suffix instead, so unmerged agent work is never lost.
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { DiffStat } from "@banyan/shared";
 
@@ -63,6 +64,28 @@ export async function createWorktree(opts: {
   for (let n = 2; await branchExists(opts.repoDir, branch); n++) branch = `${stem}-${n}`;
   await git(opts.repoDir, ["worktree", "add", "-b", branch, opts.path, baseSha]);
   return { path: opts.path, branch, baseSha };
+}
+
+// Copies a worktree's uncommitted changes, staged or not, deletions and untracked files
+// included, onto another worktree checked out at the same commit.
+export async function copyUncommittedChanges(from: string, to: string): Promise<void> {
+  // Untrimmed: a patch needs its final newline.
+  const { stdout: patch } = await exec("git", ["diff", "HEAD", "--binary"], { cwd: from, maxBuffer: 256 * 1024 * 1024 });
+  if (patch !== "") {
+    const dir = mkdtempSync(join(tmpdir(), "banyan-fork-"));
+    try {
+      writeFileSync(join(dir, "changes.patch"), patch);
+      await git(to, ["apply", "--binary", join(dir, "changes.patch")]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const untracked = await git(from, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  for (const file of untracked.split("\0").filter(Boolean)) {
+    mkdirSync(dirname(join(to, file)), { recursive: true });
+    copyFileSync(join(from, file), join(to, file));
+    chmodSync(join(to, file), statSync(join(from, file)).mode);
+  }
 }
 
 function countLines(path: string): number {

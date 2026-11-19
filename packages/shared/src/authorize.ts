@@ -63,6 +63,15 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       if (runner.memberId !== actor.id) return "members may only start agents on their own runners";
       if (!state.goals[p.goalId]) return `unknown goal ${p.goalId}`;
       if (p.provider === "shell" && (p.role !== "worker" || p.terminal !== true)) return "a shell is a worker in a terminal";
+      if (p.forkOf !== undefined) {
+        const source = state.agents[p.forkOf];
+        if (!source || source.archived) return `unknown agent ${p.forkOf}`;
+        // The copy is made on the machine holding the session, by the CLI that wrote it.
+        if (source.runnerId !== p.runnerId || source.provider !== p.provider || source.provider === "shell") return "a fork runs on its agent's runner with the same CLI";
+        if (!source.terminal || p.terminal !== true) return "only terminal agents can be forked";
+        if (source.providerSessionId === null) return "the agent has no session to fork yet";
+        if (p.role !== "worker") return "a fork is a worker";
+      }
       if (p.groupId === null) return p.role === "worker" ? null : "only workers may be standalone; leaders and monitors belong to a group";
       const group = state.groups[p.groupId];
       if (!group) return `unknown group ${p.groupId}`;

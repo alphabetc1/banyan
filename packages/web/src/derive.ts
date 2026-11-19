@@ -42,6 +42,12 @@ export function canManageAgent(state: RoomState, memberId: string, agent: Agent)
   return agent.memberId === memberId || state.members[memberId]?.role === "owner";
 }
 
+// Whether a member may fork the agent: a Claude Code or Codex terminal with a session, on the
+// member's own runner, which holds the session to copy.
+export function canForkAgent(state: RoomState, memberId: string, agent: Agent): boolean {
+  return !agent.archived && agent.terminal && agent.provider !== "shell" && agent.providerSessionId !== null && state.runners[agent.runnerId]?.memberId === memberId;
+}
+
 // Agents not removed; removed ones stay in the room's history only.
 export function activeAgents(state: RoomState): Agent[] {
   return Object.values(state.agents).filter((a) => !a.archived);

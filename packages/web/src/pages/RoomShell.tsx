@@ -96,8 +96,8 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
         {!store.connected && <div className="banner">{t("top.offline")}</div>}
       </div>
       <main className="content">
-        {route.page === "overview" && <AgentsPage />}
-        {route.page === "agent" && <AgentsPage agentId={route.agentId} />}
+        {/* One element for both, so opening an agent keeps the list as it is. */}
+        {(route.page === "overview" || route.page === "agent") && <AgentsPage agentId={route.page === "agent" ? route.agentId : undefined} />}
         {route.page === "goals" && <GoalsPage />}
         {route.page === "worktrees" && <WorktreesPage />}
         {route.page === "findings" && <FindingsPage />}
