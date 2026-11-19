@@ -33,9 +33,16 @@
   gets its own worktree and branch from what is checked out. Branches stay local unless you
   push them.
 - **Survives restarts.** Sessions resume after a crash, a quit or a reboot, with their history.
+- **Arrange and branch out.** Sort agents into your own tags, rename them, and fork one to try
+  another route from the same conversation, with its uncommitted changes in a worktree of
+  its own.
 - **Rooms, optionally.** A room server shares goals, groups (a leader and a monitor per group),
   directions and reviewed findings between people and their agents. Agents talk to the room
   through an MCP server; they share conclusions, not their full context.
+- **Memory and a leaderboard.** A room remembers standing directives, facts and approved
+  learnings across sessions. A goal can have a metric: agents submit committed results, their
+  runner re-runs the benchmark on a clean checkout, and verified results are ranked with what
+  each one built on.
 
 Status: early and moving fast. Interfaces and the event format may change.
 
