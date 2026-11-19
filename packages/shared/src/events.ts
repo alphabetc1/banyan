@@ -33,6 +33,16 @@ export type PostKind = z.infer<typeof PostKind>;
 export const MemoryKind = z.enum(["directive", "fact", "learning"]);
 export type MemoryKind = z.infer<typeof MemoryKind>;
 
+// A measurable target on a goal: agents submit results, which their runner verifies by running
+// the command on the submitted commit; the last number on its output's last line is the value.
+export const Metric = z.object({
+  name: z.string().min(1).max(100),
+  direction: z.enum(["higher", "lower"]),
+  unit: z.string().max(20),
+  command: z.string().min(1).max(2000),
+});
+export type Metric = z.infer<typeof Metric>;
+
 export const ReviewDecision = z.enum(["approved", "rejected"]);
 export type ReviewDecision = z.infer<typeof ReviewDecision>;
 
@@ -88,6 +98,8 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant("runner.registered", z.object({ runnerId: Id, memberId: Id, hostname: ShortText })),
   variant("goal.created", z.object({ goalId: Id, parentId: Id, title: ShortText, description: LongText })),
   variant("goal.status_changed", z.object({ goalId: Id, status: GoalStatus })),
+  // null removes the goal's metric; results already submitted stay.
+  variant("goal.metric_set", z.object({ goalId: Id, metric: Metric.nullable() })),
   variant("group.created", z.object({ groupId: Id, goalId: Id, name: ShortText })),
   variant(
     "agent.created",
@@ -132,6 +144,10 @@ export const EventDraft = z.discriminatedUnion("type", [
   variant("memory.recorded", z.object({ entryId: Id, kind: MemoryKind, title: ShortText, body: LongText, sourcePostId: Id.optional() })),
   variant("memory.updated", z.object({ entryId: Id, title: ShortText, body: LongText })),
   variant("memory.retired", z.object({ entryId: Id })),
+  // basedOn is the result whose commit this one built on, so improvements can be traced.
+  variant("result.submitted", z.object({ resultId: Id, agentId: Id, goalId: Id, value: z.number().finite(), commitSha: ShortText, basedOn: Id.optional(), note: LongText })),
+  variant("result.verified", z.object({ resultId: Id, value: z.number().finite(), log: LongText })),
+  variant("result.verification_failed", z.object({ resultId: Id, reason: LongText, log: LongText })),
   variant("approval.requested", z.object({ approvalId: Id, agentId: Id, tool: ShortText, input: LongText })),
   variant("approval.decided", z.object({ approvalId: Id, decision: ApprovalDecision, note: LongText.optional() })),
   // The agent process that asked is gone (crash or restart), so nobody waits for a decision.

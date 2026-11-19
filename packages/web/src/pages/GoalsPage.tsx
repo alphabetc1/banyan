@@ -4,7 +4,7 @@ import type { Agent, RoomState } from "@banyan/shared";
 import { AttentionInbox } from "../components/attention.tsx";
 import { ROLE_MARK, useNow } from "../components/common.tsx";
 import { StatusIcon } from "../components/status-icon.tsx";
-import { NewAgentDialog, NewGoalDialog, NewGroupDialog } from "../components/dialogs.tsx";
+import { MetricDialog, NewAgentDialog, NewGoalDialog, NewGroupDialog } from "../components/dialogs.tsx";
 import { useRoomStore } from "../contexts.ts";
 import { agentIcon, agentStatus, attentionItems, goalTree, groupAgents, groupsInSubtree, standaloneAgentsInSubtree, type GoalNode } from "../derive.ts";
 import { useReasonText, useT } from "../i18n.ts";
@@ -76,7 +76,7 @@ export function GoalsPage() {
   const state = store.state!;
   const tree = goalTree(state);
   const [selected, setSelected] = useState(state.room!.rootGoalId);
-  const [dialog, setDialog] = useState<null | "goal" | "group" | "agent">(null);
+  const [dialog, setDialog] = useState<null | "goal" | "group" | "agent" | "metric">(null);
   if (!tree) return null;
   const goal = state.goals[selected] ?? state.goals[state.room!.rootGoalId]!;
   const groups = groupsInSubtree(state, goal.id);
@@ -96,7 +96,14 @@ export function GoalsPage() {
           <div className="stack" style={{ gap: 2, flex: 1 }}>
             <h2>{goal.title}</h2>
             {goal.description && <span className="muted">{goal.description}</span>}
+            {goal.metric && (
+              <span className="faint" data-testid="goal-metric">
+                {t("metric.label")}: {goal.metric.name} · {t(`metric.${goal.metric.direction}`)}
+                {goal.metric.unit && ` · ${goal.metric.unit}`} · <code>{goal.metric.command}</code>
+              </span>
+            )}
           </div>
+          <button onClick={() => setDialog("metric")}>{t("metric.button")}</button>
           <button onClick={() => setDialog("goal")}>{t("overview.newGoal")}</button>
           <button onClick={() => setDialog("group")}>{t("overview.newGroup")}</button>
           <button className="primary" onClick={() => setDialog("agent")}>
@@ -133,6 +140,7 @@ export function GoalsPage() {
       {dialog === "goal" && <NewGoalDialog parentId={goal.id} onClose={() => setDialog(null)} />}
       {dialog === "group" && <NewGroupDialog goalId={goal.id} onClose={() => setDialog(null)} />}
       {dialog === "agent" && <NewAgentDialog goalId={goal.id} onClose={() => setDialog(null)} />}
+      {dialog === "metric" && <MetricDialog goalId={goal.id} onClose={() => setDialog(null)} />}
     </div>
   );
 }

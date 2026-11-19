@@ -605,6 +605,66 @@ test("keeps the room's memory: directives and facts people write, findings they 
   ]);
 });
 
+test("sets a goal's metric and ranks verified results with what each built on", async ({ page }) => {
+  const room = await createRoomInUi(page);
+  const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);
+  const member = await socket(room.roomId, room.token);
+  const [alpha, beta] = [newId(), newId()];
+  const base = { groupId: null, runnerId: runner.runnerId, role: "worker" as const, provider: "claude" as const, model: "default", goalId: room.rootGoalId, instructions: "" };
+  await member.append([draft("agent.created", { ...base, agentId: alpha, name: "alpha" }), draft("agent.created", { ...base, agentId: beta, name: "beta" })]);
+
+  await page.getByRole("link", { name: "Leaderboard" }).click();
+  await expect(page.getByText("No goal has a metric yet.")).toBeVisible();
+  await page.getByRole("link", { name: "Goals" }).click();
+  await page.getByRole("button", { name: "Metric" }).click();
+  await page.getByLabel("Metric name").fill("prefill throughput");
+  await page.getByLabel("Unit").fill("tok/s");
+  await page.getByLabel("Command").fill("python bench.py | tail -1");
+  await expect(page.getByRole("radio", { name: "Higher is better" })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("goal-metric")).toContainText("prefill throughput · Higher is better · tok/s · python bench.py | tail -1");
+
+  // Results as agents submit them and their runner verifies them.
+  const r = await socket(room.roomId, runner.runnerToken);
+  const submit = (resultId: string, agentId: string, value: number, basedOn?: string) =>
+    r.append([draft("result.submitted", { resultId, agentId, goalId: room.rootGoalId, value, commitSha: `${resultId}0000000000`, note: `${resultId} note`, ...(basedOn ? { basedOn } : {}) })], agentId);
+  await submit("base", alpha, 1000);
+  await submit("better", beta, 1300, "base");
+  await submit("waiting", alpha, 1500, "better");
+  await submit("broken", beta, 9999);
+  await r.append([
+    draft("result.verified", { resultId: "base", value: 990, log: "" }),
+    draft("result.verified", { resultId: "better", value: 1280, log: "" }),
+    draft("result.verification_failed", { resultId: "broken", reason: "the command exited with code 1", log: "Traceback: CUDA out of memory" }),
+  ]);
+  await page.getByRole("link", { name: "Leaderboard" }).click();
+  const board = page.getByTestId(`board-Make sglang faster`);
+  await expect(board.getByTestId("result-1")).toContainText("1280 tok/s");
+  await expect(board.getByTestId("result-1")).toContainText("beta");
+  await expect(board.getByTestId("result-1")).toContainText("#2 alpha");
+  await expect(board.getByTestId("result-1")).toContainText("better00");
+  await expect(board.getByTestId("result-2")).toContainText("990 tok/s");
+  await expect(board.getByTestId("results-pending")).toContainText("alpha · claimed 1500 tok/s");
+  await board.getByRole("button", { name: "Failed verification (1)" }).click();
+  await expect(board.getByTestId("results-failed")).toContainText("the command exited with code 1");
+  await expect(board.getByTestId("results-failed")).toContainText("CUDA out of memory");
+
+  // Lower is better turns the ranking around; removing the metric takes the board away.
+  await page.getByRole("link", { name: "Goals" }).click();
+  await page.getByRole("button", { name: "Metric" }).click();
+  await expect(page.getByLabel("Metric name")).toHaveValue("prefill throughput");
+  await page.getByRole("radio", { name: "Lower is better" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("link", { name: "Leaderboard" }).click();
+  await expect(board.getByTestId("result-1")).toContainText("990 tok/s");
+  await page.getByRole("link", { name: "Goals" }).click();
+  await page.getByRole("button", { name: "Metric" }).click();
+  await page.getByRole("button", { name: "Remove metric" }).click();
+  await expect(page.getByTestId("goal-metric")).toHaveCount(0);
+  await page.getByRole("link", { name: "Leaderboard" }).click();
+  await expect(page.getByText("No goal has a metric yet.")).toBeVisible();
+});
+
 test("reviews findings as a human, shows worktrees and coordination, and switches language and theme", async ({ page }) => {
   const room = await createRoomInUi(page);
   const runner = await api(`/api/rooms/${room.roomId}/runners`, { hostname: "gpu-box" }, room.token);

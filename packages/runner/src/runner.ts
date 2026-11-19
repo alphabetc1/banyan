@@ -62,7 +62,7 @@ export class Runner {
       return this.link.state;
     };
     const emit = (drafts: EventDraft[], asAgent: string | null = null) => this.link.emit(drafts, asAgent);
-    this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message) });
+    this.mcp = new RoomMcp({ state, emit, now: Date.now, commit: (agentId, message) => this.supervisor.commitFor(agentId, message), head: (agentId) => this.supervisor.headFor(agentId) });
     const processes = new AgentProcesses(config.roomDir);
     this.providers = { claude: new ClaudeProvider(processes, config.claudePermissionMode), codex: new CodexProvider(log, processes) };
     this.terminals = { claude: TerminalProvider.claude(processes, config.claudePermissionMode), codex: TerminalProvider.codex(processes), shell: TerminalProvider.shell(processes) };

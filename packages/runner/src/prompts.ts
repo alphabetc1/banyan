@@ -1,5 +1,5 @@
 // System prompts and runner-originated messages that explain the Banyan protocol to agents.
-import { activeMemory, agentGroup, goalPath, type Agent, type MemoryEntry, type RoomState } from "@banyan/shared";
+import { activeMemory, agentGroup, goalPath, metricGoal, type Agent, type MemoryEntry, type RoomState } from "@banyan/shared";
 
 const STANDALONE = `You work on your own, not in a group. Your peers are the other agents on your goal: room_get_context
 shows their findings and directions. With proposeRoomVisible, a leader on your goal path (or a person) reviews your
@@ -38,6 +38,17 @@ function directivesSection(state: RoomState): string {
   return directives.length === 0 ? "" : `Standing directives from the people in this room; always follow them:\n${directives.map(directiveText).join("\n")}`;
 }
 
+// When the agent's goal path has a metric, results count only once their runner re-ran them.
+function metricSection(state: RoomState, agent: Agent): string {
+  const goal = metricGoal(state, agent.goalId);
+  if (!goal?.metric) return "";
+  const m = goal.metric;
+  return `Goal "${goal.title}" is measured by ${m.name} (${m.direction} is better${m.unit ? `, in ${m.unit}` : ""}), with this command run in the repository: ${m.command}
+Check room_leaderboard first and build on the best verified result (merge or cherry-pick its commit). When you improve
+the metric, commit with room_commit, then submit with room_submit_result, naming the result you built on. Your runner
+re-runs the command on your commit to verify it; only verified values rank.`;
+}
+
 function goalPathText(state: RoomState, goalId: string): string {
   return goalPath(state, goalId)
     .map((g) => g.title)
@@ -51,6 +62,7 @@ export function systemPrompt(state: RoomState, agent: Agent): string {
     ROLE[agent.role],
     group ? "" : STANDALONE,
     directivesSection(state),
+    metricSection(state, agent),
     `Your name: ${agent.name}. ${group ? `Your group: ${group.name}. ` : ""}Your goal: ${goalPathText(state, agent.goalId)}.`,
     agent.instructions ? `Instructions from the person who started you:\n${agent.instructions}` : "",
   ]
@@ -80,6 +92,11 @@ export function freshAfterLossMessage(state: RoomState, agent: Agent, reason: st
 export function directiveChangedMessage(change: "added" | "changed" | "retired", entry: MemoryEntry): string {
   if (change === "retired") return `A person retired this standing directive; it no longer applies:\n${directiveText(entry)}`;
   return `A person ${change === "added" ? "added a" : "changed a"} standing directive to the room's memory; always follow it:\n${directiveText(entry)}`;
+}
+
+export function resultVerdictMessage(claimed: number, unit: string, verdict: { ok: true; value: number } | { ok: false; reason: string }): string {
+  const u = unit ? ` ${unit}` : "";
+  return verdict.ok ? `Your result (${claimed}${u}) was verified at ${verdict.value}${u}.` : `Your result (${claimed}${u}) could not be verified: ${verdict.reason}.`;
 }
 
 export const MONITOR_CHECK_MESSAGE = "Periodic check: call room_group_digest, assess your group's progress and advise your leader if needed.";

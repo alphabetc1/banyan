@@ -6,9 +6,10 @@ import { homedir } from "node:os";
 import { agentGroup, draft, isPlainAgent, newId, postReviewers, type Agent, type EventDraft, type RoomEvent, type RoomState, type TranscriptEntry } from "@banyan/shared";
 import type { LocalStore } from "./local-store.ts";
 import type { Logger } from "./logger.ts";
-import { directiveChangedMessage, freshAfterLossMessage, kickoffMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
+import { directiveChangedMessage, freshAfterLossMessage, kickoffMessage, resultVerdictMessage, MONITOR_CHECK_MESSAGE, plainFirstMessage, RESUMED_MESSAGE, reviewRequestMessage, roomMessage, systemPrompt, workerPhaseMessage } from "./prompts.ts";
 import type { AgentProvider, AgentSession, TerminalHandle } from "./providers/types.ts";
 import type { RoomMcp } from "./room-mcp.ts";
+import { verifyResult } from "./verify.ts";
 import { commitAll, copyUncommittedChanges, createWorktree, ensureClone, git, hasCommit, pushBranch, worktreeStatus } from "./worktree.ts";
 
 const TRANSCRIPT_BATCH_MAX = 200;
@@ -63,6 +64,9 @@ export class Supervisor {
   private timers: NodeJS.Timeout[] = [];
   private repoReady: Promise<string> | null = null;
   private closed = false;
+  private verifications: Promise<void> = Promise.resolve();
+  private verifyQueued = new Set<string>();
+  private verificationAbort = new AbortController();
   // Until start() runs, it is the one that brings agents up; live creation events are ignored.
   private started = false;
 
@@ -89,6 +93,10 @@ export class Supervisor {
     // Agents resume in the background, each reporting its own progress, so the runner counts
     // as up once it is connected; close() waits for any that are still starting.
     for (const a of this.mine(state)) void this.ensureRunning(a.id);
+    // Results a previous process never finished verifying.
+    for (const r of Object.values(state.results)) {
+      if (r.status === "pending" && state.agents[r.agentId]?.runnerId === this.opts.runnerId) this.queueVerification(r.id);
+    }
     if (this.opts.monitorIntervalMs) this.timers.push(setInterval(() => this.nudgeMonitors(), this.opts.monitorIntervalMs));
   }
 
@@ -97,6 +105,9 @@ export class Supervisor {
   async close(): Promise<void> {
     this.closed = true;
     for (const t of this.timers) clearInterval(t);
+    // An unfinished verification stays pending and runs again on the next start.
+    this.verificationAbort.abort();
+    await this.verifications;
     await Promise.all(this.starting.values());
     const runs = [...this.running.values()];
     await Promise.all(runs.map((r) => r.session.stop()));
@@ -122,6 +133,8 @@ export class Supervisor {
         this.openApprovals.delete(e.payload.approvalId);
       } else if (e.type === "post.created" && e.payload.proposeRoomVisible) {
         this.notifyReviewers(state, e.payload.postId);
+      } else if (e.type === "result.submitted" && state.agents[e.payload.agentId]?.runnerId === this.opts.runnerId && this.started) {
+        this.queueVerification(e.payload.resultId);
       } else if (e.type === "memory.recorded" || e.type === "memory.updated" || e.type === "memory.retired") {
         this.notifyDirectiveChange(state, e.payload.entryId, e.type === "memory.recorded" ? "added" : e.type === "memory.updated" ? "changed" : "retired");
       } else if (e.type === "agent.phase_reported" && LEADER_ALERT_PHASES.has(e.payload.phase)) {
@@ -334,6 +347,47 @@ export class Supervisor {
     }
     this.opts.log.warn(`agent ${agentId} crashed (${detail}); restarting in ${CRASH_RESTART_DELAY_MS} ms`);
     setTimeout(() => void this.ensureRunning(agentId), CRASH_RESTART_DELAY_MS);
+  }
+
+  // The agent's committed head, for a result it submits, and whether anything is uncommitted.
+  async headFor(agentId: string): Promise<{ sha: string; dirty: boolean }> {
+    const wt = this.opts.store.worktree(agentId);
+    if (!wt) throw new Error("this agent has no worktree");
+    return { sha: await git(wt.path, ["rev-parse", "HEAD"]), dirty: (await git(wt.path, ["status", "--porcelain"])) !== "" };
+  }
+
+  // Verifications run one at a time on this machine, so a benchmark never shares it with
+  // another one.
+  private queueVerification(resultId: string): void {
+    if (this.verifyQueued.has(resultId)) return;
+    this.verifyQueued.add(resultId);
+    this.verifications = this.verifications.then(() => this.verify(resultId)).finally(() => this.verifyQueued.delete(resultId));
+  }
+
+  private async verify(resultId: string): Promise<void> {
+    if (this.closed) return;
+    const state = this.opts.state();
+    const result = state.results[resultId];
+    if (result?.status !== "pending") return;
+    const metric = state.goals[result.goalId]?.metric;
+    const wt = this.opts.store.worktree(result.agentId);
+    let verdict;
+    try {
+      verdict = !metric
+        ? { ok: false as const, reason: "the goal no longer has a metric", log: "" }
+        : !wt
+          ? { ok: false as const, reason: "the agent's worktree is not on this machine", log: "" }
+          : await verifyResult({ repoDir: wt.path, commitSha: result.commitSha, command: metric.command, signal: this.verificationAbort.signal });
+    } catch (e) {
+      verdict = { ok: false as const, reason: (e as Error).message, log: "" };
+    }
+    if (verdict === null || this.closed) return;
+    this.opts.emit([
+      verdict.ok
+        ? draft("result.verified", { resultId, value: verdict.value, log: verdict.log })
+        : draft("result.verification_failed", { resultId, reason: verdict.reason, log: verdict.log }),
+    ]);
+    this.running.get(result.agentId)?.session.send(resultVerdictMessage(result.claimed, metric?.unit ?? "", verdict), "fyi");
   }
 
   // Commits on behalf of an agent (Room MCP room_commit), then syncs and pushes its branch.

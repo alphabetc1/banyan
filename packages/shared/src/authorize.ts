@@ -47,6 +47,9 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       if (actor.kind === "member" || leaderCovers(state, actor, draft.payload.goalId)) return null;
       return "only members or the covering group leader may change goal status";
     }
+    case "goal.metric_set":
+      if (actor.kind !== "member") return "only people set a goal's metric";
+      return state.goals[draft.payload.goalId] ? null : `unknown goal ${draft.payload.goalId}`;
     case "group.created": {
       const p = draft.payload;
       if (actor.kind !== "member") return "only members may create groups";
@@ -103,6 +106,25 @@ export function authorize(state: RoomState, actor: Actor, draft: EventDraft): st
       const wt = state.worktrees[draft.payload.worktreeId];
       if (!wt) return `unknown worktree ${draft.payload.worktreeId}`;
       return agentOwnedByRunner(state, actor, wt.agentId);
+    }
+    case "result.submitted": {
+      const p = draft.payload;
+      if (actor.kind !== "agent" || actor.id !== p.agentId) return "agents may only submit their own results";
+      const agent = state.agents[p.agentId];
+      if (!agent) return `unknown agent ${p.agentId}`;
+      if (state.results[p.resultId]) return `result ${p.resultId} already exists`;
+      const goal = state.goals[p.goalId];
+      if (!goal?.metric) return "that goal has no metric to submit results for";
+      if (!isGoalWithin(state, agent.goalId, p.goalId)) return "results go to a goal on your own goal path";
+      if (p.basedOn !== undefined && state.results[p.basedOn]?.goalId !== p.goalId) return `unknown result ${p.basedOn} on that goal`;
+      return null;
+    }
+    case "result.verified":
+    case "result.verification_failed": {
+      const result = state.results[draft.payload.resultId];
+      if (!result) return `unknown result ${draft.payload.resultId}`;
+      if (result.status !== "pending") return "the result has already been verified";
+      return agentOwnedByRunner(state, actor, result.agentId);
     }
     case "memory.recorded": {
       if (actor.kind !== "member") return "only people record memory; agents propose learnings";

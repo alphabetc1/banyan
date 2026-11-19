@@ -11,6 +11,8 @@ import {
   activeMemory,
   agentGroup,
   authorize,
+  leaderboard,
+  metricGoal,
   deriveHealth,
   describeHealthReason,
   draft,
@@ -34,6 +36,8 @@ export interface RoomAccess {
   now(): number;
   // Commits the agent's own worktree; null when there was nothing to commit.
   commit(agentId: string, message: string): Promise<{ sha: string; files: number } | null>;
+  // The agent's committed head, and whether its worktree has uncommitted changes.
+  head(agentId: string): Promise<{ sha: string; dirty: boolean }>;
 }
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -194,6 +198,41 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
   );
 
   server.registerTool(
+    "room_leaderboard",
+    {
+      description:
+        "Verified results on your goal's metric, best first, with the commit and branch of each so you can build on the best. Also lists results still being verified.",
+      inputSchema: { goalId: z.string().optional() },
+    },
+    async ({ goalId }) => {
+      const state = room.state();
+      const self = me();
+      const goal = goalId ? state.goals[goalId] : self ? metricGoal(state, self.goalId) : null;
+      if (!goal?.metric) return fail("no goal with a metric on your goal path");
+      const branchOf = (agentId: string) => {
+        const wtId = state.agents[agentId]?.worktreeId;
+        return wtId ? (state.worktrees[wtId]?.branch ?? null) : null;
+      };
+      const describe = (r: { id: string; agentId: string; commitSha: string; basedOn: string | null; note: string }) => ({
+        id: r.id,
+        by: state.agents[r.agentId]?.name ?? r.agentId,
+        commit: r.commitSha,
+        branch: branchOf(r.agentId),
+        basedOn: r.basedOn,
+        note: r.note,
+      });
+      return ok({
+        goal: goal.title,
+        metric: goal.metric,
+        ranked: leaderboard(state, goal.id).map((r, i) => ({ rank: i + 1, value: r.value, ...describe(r) })),
+        pending: Object.values(state.results)
+          .filter((r) => r.goalId === goal.id && r.status === "pending")
+          .map((r) => ({ claimed: r.claimed, ...describe(r) })),
+      });
+    },
+  );
+
+  server.registerTool(
     "room_list_directions",
     {
       description: "List directions declared by agents under a goal (default: your group's goal), to avoid duplicate exploration.",
@@ -225,6 +264,34 @@ function buildServer(agentId: string, room: RoomAccess): McpServer {
         } catch (e) {
           return fail(`commit failed: ${(e as Error).message}`);
         }
+      },
+    );
+
+    server.registerTool(
+      "room_submit_result",
+      {
+        description:
+          "Submit your committed work as a result on your goal's metric. Commit first with room_commit: your runner re-runs the metric's command on that commit to verify the value. Name the result you built on with basedOn.",
+        inputSchema: {
+          value: z.number().finite().describe("the value you measured"),
+          basedOn: z.string().optional().describe("id of the result whose commit you built on, from room_leaderboard"),
+          note: z.string().max(2000).default("").describe("what you changed"),
+        },
+      },
+      async ({ value, basedOn, note }) => {
+        const self = me();
+        const goal = self ? metricGoal(room.state(), self.goalId) : null;
+        if (!goal) return fail("no goal with a metric on your goal path");
+        let head;
+        try {
+          head = await room.head(agentId);
+        } catch (e) {
+          return fail((e as Error).message);
+        }
+        if (head.dirty) return fail("your worktree has uncommitted changes; commit them with room_commit first, since only committed code is verified");
+        const resultId = newId();
+        const error = write(draft("result.submitted", { resultId, agentId, goalId: goal.id, value, commitSha: head.sha, note, ...(basedOn ? { basedOn } : {}) }));
+        return error ? fail(error) : ok({ resultId, commit: head.sha, status: "submitted; your runner is verifying it" });
       },
     );
   }

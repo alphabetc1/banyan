@@ -9,6 +9,7 @@ import type {
   Evidence,
   GoalStatus,
   MemoryKind,
+  Metric,
   PostKind,
   ProcessState,
   Provider,
@@ -46,6 +47,7 @@ export interface Goal {
   title: string;
   description: string;
   status: GoalStatus;
+  metric: Metric | null;
   createdAt: number;
 }
 
@@ -120,6 +122,24 @@ export interface Post {
   createdAt: number;
 }
 
+export interface Result {
+  id: string;
+  agentId: string;
+  goalId: string;
+  // What the agent measured; the verified value is what counts.
+  claimed: number;
+  commitSha: string;
+  basedOn: string | null;
+  note: string;
+  status: "pending" | "verified" | "failed";
+  value: number | null;
+  // The verification's output tail, or why it failed.
+  log: string;
+  failure: string | null;
+  submittedAt: number;
+  verifiedAt: number | null;
+}
+
 export interface MemoryEntry {
   id: string;
   kind: MemoryKind;
@@ -165,6 +185,7 @@ export interface RoomState {
   worktrees: Record<string, Worktree>;
   posts: Record<string, Post>;
   memory: Record<string, MemoryEntry>;
+  results: Record<string, Result>;
   approvals: Record<string, Approval>;
   messages: Record<string, Message>;
   lastSeq: number;
@@ -181,6 +202,7 @@ export function emptyRoomState(): RoomState {
     worktrees: {},
     posts: {},
     memory: {},
+    results: {},
     approvals: {},
     messages: {},
     lastSeq: 0,
@@ -206,6 +228,7 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
         title: p.rootGoalTitle,
         description: p.rootGoalDescription,
         status: "open",
+        metric: null,
         createdAt: e.ts,
       };
       break;
@@ -218,12 +241,17 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
       break;
     case "goal.created": {
       const p = e.payload;
-      state.goals[p.goalId] = { id: p.goalId, parentId: p.parentId, title: p.title, description: p.description, status: "open", createdAt: e.ts };
+      state.goals[p.goalId] = { id: p.goalId, parentId: p.parentId, title: p.title, description: p.description, status: "open", metric: null, createdAt: e.ts };
       break;
     }
     case "goal.status_changed": {
       const goal = state.goals[e.payload.goalId];
       if (goal) goal.status = e.payload.status;
+      break;
+    }
+    case "goal.metric_set": {
+      const goal = state.goals[e.payload.goalId];
+      if (goal) goal.metric = e.payload.metric;
       break;
     }
     case "group.created":
@@ -379,6 +407,22 @@ export function applyEvent(state: RoomState, e: RoomEvent): RoomState {
       }
       break;
     }
+    case "result.submitted": {
+      const p = e.payload;
+      touchAgent(state, p.agentId, e.ts);
+      state.results[p.resultId] = { id: p.resultId, agentId: p.agentId, goalId: p.goalId, claimed: p.value, commitSha: p.commitSha, basedOn: p.basedOn ?? null, note: p.note, status: "pending", value: null, log: "", failure: null, submittedAt: e.ts, verifiedAt: null };
+      break;
+    }
+    case "result.verified": {
+      const result = state.results[e.payload.resultId];
+      if (result) Object.assign(result, { status: "verified", value: e.payload.value, log: e.payload.log, verifiedAt: e.ts });
+      break;
+    }
+    case "result.verification_failed": {
+      const result = state.results[e.payload.resultId];
+      if (result) Object.assign(result, { status: "failed", failure: e.payload.reason, log: e.payload.log, verifiedAt: e.ts });
+      break;
+    }
     case "memory.recorded": {
       const p = e.payload;
       state.memory[p.entryId] = { id: p.entryId, kind: p.kind, title: p.title, body: p.body, sourcePostId: p.sourcePostId ?? null, recordedBy: e.actor, recordedAt: e.ts, updatedAt: e.ts, retired: false };
@@ -479,6 +523,21 @@ export function agentGroup(state: RoomState, agent: Agent): Group | undefined {
 // coordination instructions, no Room MCP and no kickoff of its own.
 export function isPlainAgent(state: RoomState, agent: Agent): boolean {
   return agent.provider === "shell" || (state.room?.personal === true && agent.groupId === null);
+}
+
+// The nearest goal with a metric from this goal up to the root: where the agent's results count.
+export function metricGoal(state: RoomState, goalId: string): Goal | null {
+  return goalPath(state, goalId).reverse().find((g) => g.metric !== null) ?? null;
+}
+
+// A goal's verified results, best first; ties go to the earlier submission.
+export function leaderboard(state: RoomState, goalId: string): Result[] {
+  const metric = state.goals[goalId]?.metric;
+  if (!metric) return [];
+  const sign = metric.direction === "higher" ? -1 : 1;
+  return Object.values(state.results)
+    .filter((r) => r.goalId === goalId && r.status === "verified")
+    .sort((a, b) => sign * (a.value! - b.value!) || a.submittedAt - b.submittedAt);
 }
 
 // Memory entries that still reach agents, oldest first.

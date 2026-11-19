@@ -12,6 +12,7 @@ import { roomCredentials, savedRooms } from "../session.ts";
 import { AgentsPage } from "./AgentsPage.tsx";
 import { CoordinationPage } from "./CoordinationPage.tsx";
 import { FindingsPage } from "./FindingsPage.tsx";
+import { LeaderboardPage } from "./LeaderboardPage.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { GoalsPage } from "./GoalsPage.tsx";
 import { WorktreesPage } from "./WorktreesPage.tsx";
@@ -25,6 +26,7 @@ const NAV: { page: RoomRoute["page"]; label: MessageKey; personal?: boolean }[] 
   { page: "worktrees", label: "nav.worktrees", personal: true },
   { page: "findings", label: "nav.findings" },
   { page: "memory", label: "nav.memory" },
+  { page: "leaderboard", label: "nav.leaderboard" },
   { page: "coordination", label: "nav.coordination" },
 ];
 
@@ -104,6 +106,7 @@ function RoomFrame({ route, store, memberToken }: { route: RoomRoute; store: Roo
         {route.page === "worktrees" && <WorktreesPage />}
         {route.page === "findings" && <FindingsPage />}
         {route.page === "memory" && <MemoryPage />}
+        {route.page === "leaderboard" && <LeaderboardPage />}
         {route.page === "coordination" && <CoordinationPage />}
       </main>
       {inviting && <InviteDialog onClose={() => setInviting(false)} />}

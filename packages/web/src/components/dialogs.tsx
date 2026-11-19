@@ -1,6 +1,6 @@
-// Creation dialogs (goal, group, agent), renaming an agent, and the invite dialog.
+// Creation dialogs (goal, group, agent), renaming an agent, a goal's metric, and the invite dialog.
 import { useEffect, useState } from "react";
-import { draft, isGoalWithin, newId, type Agent } from "@banyan/shared";
+import { draft, isGoalWithin, newId, type Agent, type Metric } from "@banyan/shared";
 import { createInvite } from "../api.ts";
 import { useRoomStore } from "../contexts.ts";
 import { inDesktopClient, installCommand, pickRepository } from "../desktop.tsx";
@@ -277,6 +277,61 @@ export function RenameAgentDialog({ agentId, onClose }: { agentId: string; onClo
           <input required autoFocus maxLength={500} value={name} onChange={(e) => setName(e.target.value)} onFocus={(e) => e.target.select()} />
         </label>
         <Actions busy={action.busy || !name.trim()} error={action.error} onClose={onClose} submitLabel="settings.save" />
+      </form>
+    </Dialog>
+  );
+}
+
+export function MetricDialog({ goalId, onClose }: { goalId: string; onClose: () => void }) {
+  const t = useT();
+  const store = useRoomStore();
+  const action = useAction();
+  const current = store.state!.goals[goalId]?.metric ?? null;
+  const [metric, setMetric] = useState<Metric>(current ?? { name: "", direction: "higher", unit: "", command: "" });
+  const set = (patch: Partial<Metric>) => setMetric({ ...metric, ...patch });
+  const save = (value: Metric | null) => void action.run(() => store.append([draft("goal.metric_set", { goalId, metric: value })])).then((ok) => ok && onClose());
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    save({ ...metric, name: metric.name.trim(), unit: metric.unit.trim(), command: metric.command.trim() });
+  };
+  return (
+    <Dialog title={t("metric.title")} onClose={onClose}>
+      <form className="stack" onSubmit={submit}>
+        <label>
+          {t("metric.name")}
+          <input required autoFocus maxLength={100} value={metric.name} onChange={(e) => set({ name: e.target.value })} placeholder="prefill throughput" />
+        </label>
+        <div className="segmented" role="radiogroup" aria-label={t("metric.direction")}>
+          {(["higher", "lower"] as const).map((d) => (
+            <button key={d} type="button" role="radio" aria-checked={metric.direction === d} className={metric.direction === d ? "selected" : ""} onClick={() => set({ direction: d })}>
+              {t(`metric.${d}`)}
+            </button>
+          ))}
+        </div>
+        <label>
+          {t("metric.unit")}
+          <input maxLength={20} value={metric.unit} onChange={(e) => set({ unit: e.target.value })} placeholder="tok/s" />
+        </label>
+        <label>
+          {t("metric.command")}
+          <textarea required rows={2} maxLength={2000} className="mono" value={metric.command} onChange={(e) => set({ command: e.target.value })} placeholder="python bench.py --model llama-8b | tail -1" spellCheck={false} />
+        </label>
+        <span className="faint">{t("metric.commandHint")}</span>
+        {action.error && <span className="error">{action.error}</span>}
+        <div className="row">
+          {current && (
+            <button type="button" className="ghost" disabled={action.busy} onClick={() => save(null)}>
+              {t("metric.remove")}
+            </button>
+          )}
+          <span style={{ flex: 1 }} />
+          <button type="button" className="ghost" onClick={onClose}>
+            {t("dialog.cancel")}
+          </button>
+          <button className="primary" disabled={action.busy || !metric.name.trim() || !metric.command.trim()}>
+            {t("settings.save")}
+          </button>
+        </div>
       </form>
     </Dialog>
   );

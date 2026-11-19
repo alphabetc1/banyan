@@ -57,6 +57,10 @@ async function setup() {
     emit: (d, asAgent) => link.emit(d, asAgent),
     now: Date.now,
     commit: (agentId, message) => (agentId === ids.W1 ? commitAll(wt.path, "w1", message) : Promise.reject(new Error("no worktree"))),
+    head: async (agentId) => {
+      if (agentId !== ids.W1) throw new Error("this agent has no worktree");
+      return { sha: await git(wt.path, ["rev-parse", "HEAD"]), dirty: (await git(wt.path, ["status", "--porcelain"])) !== "" };
+    },
   });
   await mcp.start();
   cleanups.push(() => mcp.close());
@@ -79,11 +83,12 @@ const textOf = (r: CallResult) => r.content[0]?.text ?? "";
 describe("Room MCP", () => {
   it("exposes tools by role", async () => {
     const { ids, client } = await setup();
-    const common = ["room_declare_direction", "room_get_context", "room_list_directions", "room_post_finding", "room_propose_learning", "room_search_memory", "room_set_status"];
-    expect(await (await client(ids.W1)).tools()).toEqual([...common, "room_commit"].sort());
-    expect(await (await client(ids.W2)).tools()).toEqual([...common, "room_commit"].sort());
-    expect(await (await client(ids.X)).tools()).toEqual([...common, "room_commit"].sort());
-    expect(await (await client(ids.S1)).tools()).toEqual([...common, "room_commit"].sort());
+    const common = ["room_declare_direction", "room_get_context", "room_leaderboard", "room_list_directions", "room_post_finding", "room_propose_learning", "room_search_memory", "room_set_status"];
+    const worker = [...common, "room_commit", "room_submit_result"].sort();
+    expect(await (await client(ids.W1)).tools()).toEqual(worker);
+    expect(await (await client(ids.W2)).tools()).toEqual(worker);
+    expect(await (await client(ids.X)).tools()).toEqual(worker);
+    expect(await (await client(ids.S1)).tools()).toEqual(worker);
     expect(await (await client(ids.M)).tools()).toEqual([...common, "room_advise_leader", "room_group_digest"].sort());
     expect(await (await client(ids.L)).tools()).toEqual([...common, "room_create_goal", "room_group_digest", "room_message", "room_pending_reviews", "room_review_post"].sort());
   });
@@ -131,6 +136,41 @@ describe("Room MCP", () => {
     expect(textOf(await leader.call("room_review_post", { postId: proposed.postId, decision: "approved" }))).toMatch(/approved/);
     await waitFor(() => link.state!.memory[proposed.postId], "approved learning in memory");
     expect(await search({ query: "warm" })).toEqual(["Warm up the GPU before timing"]);
+  });
+
+  it("submits committed results on the goal's metric and lists them on the leaderboard", async () => {
+    const { ids, client, server, room, link, store, wt } = await setup();
+    const w1 = await client(ids.W1);
+    const noMetric = await w1.call("room_submit_result", { value: 1 });
+    expect(noMetric.isError).toBe(true);
+    expect(textOf(noMetric)).toBe("no goal with a metric on your goal path");
+    await appendAsMember(server, room.roomId, room.memberToken, [
+      draft("goal.metric_set", { goalId: "prefill", metric: { name: "throughput", direction: "higher", unit: "tok/s", command: "sh bench.sh" } }),
+    ]);
+    await waitFor(() => link.state!.goals.prefill?.metric, "metric in projection");
+    // Only committed work can be verified.
+    writeFileSync(join(wt.path, "bench.sh"), "echo 1200\n");
+    const dirty = await w1.call("room_submit_result", { value: 1200 });
+    expect(dirty.isError).toBe(true);
+    expect(textOf(dirty)).toMatch(/uncommitted changes; commit them with room_commit first/);
+    await w1.call("room_commit", { message: "bench" });
+    const head = await git(wt.path, ["rev-parse", "HEAD"]);
+    const first = JSON.parse(textOf(await w1.call("room_submit_result", { value: 1200, note: "baseline" })));
+    expect(first).toMatchObject({ commit: head });
+    const bad = await w1.call("room_submit_result", { value: 1300, basedOn: "nope" });
+    expect(textOf(bad)).toBe("unknown result nope on that goal");
+    await waitFor(() => store.outboxSize() === 0, "outbox to drain");
+
+    const board = async () => JSON.parse(textOf(await (await client(ids.W2)).call("room_leaderboard")));
+    expect(await board()).toMatchObject({ goal: "Improve prefill", ranked: [], pending: [{ claimed: 1200, by: "w1", commit: head, note: "baseline" }] });
+    // Once the runner verifies it, it ranks, with the branch to build on.
+    link.emit([draft("result.verified", { resultId: first.resultId, value: 1180, log: "1180" })]);
+    await waitFor(() => link.state!.results[first.resultId]?.status === "verified", "verified result");
+    const ranked = (await board()).ranked;
+    expect(ranked).toEqual([{ rank: 1, value: 1180, id: first.resultId, by: "w1", commit: head, branch: wt.branch, basedOn: null, note: "baseline" }]);
+    // A leader has no worktree of its own to submit from, but can read the board.
+    expect(JSON.parse(textOf(await (await client(ids.L)).call("room_leaderboard"))).ranked).toHaveLength(1);
+    expect(textOf(await (await client(ids.X)).call("room_leaderboard"))).toBe("no goal with a metric on your goal path");
   });
 
   it("rejects requests without the agent's secret", async () => {

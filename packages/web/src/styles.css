@@ -957,6 +957,51 @@ label {
   opacity: 0.6;
 }
 
+.mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.leaderboard {
+  max-width: 1000px;
+}
+.board {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.board th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.board td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.board tr:last-child td {
+  border-bottom: none;
+}
+.board .value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.board .note {
+  color: var(--text-muted);
+}
+.log {
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
 .diffbar {
   display: flex;
   height: 6px;

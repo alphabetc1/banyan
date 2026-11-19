@@ -8,6 +8,8 @@ import {
   postReviewers,
   type Actor,
   EventDraft,
+  leaderboard,
+  metricGoal,
   type RoomState,
 } from "../src/index.ts";
 
@@ -355,6 +357,52 @@ describe("authorize", () => {
     r.must(agent("W1"), draft("post.created", { postId: "pc", agentId: "W1", kind: "conclusion", summary: "s", body: "", evidence: [], proposeRoomVisible: true }));
     r.must(agent("L"), draft("post.reviewed", { postId: "pc", decision: "approved" }));
     expect(Object.keys(r.state.memory)).toEqual(["pl"]);
+  });
+
+  it("lets people set a goal's metric and agents submit results their runner verifies", () => {
+    const r = seededRoom();
+    const metric = { name: "prefill throughput", direction: "higher" as const, unit: "tok/s", command: "python bench.py" };
+    expect(r.submit(agent("L"), draft("goal.metric_set", { goalId: "prefill", metric }))).toBe("only people set a goal's metric");
+    const submit = (id: string, who: string, p: { goalId?: string; value?: number; basedOn?: string } = {}) =>
+      draft("result.submitted", { resultId: id, agentId: who, goalId: p.goalId ?? "prefill", value: p.value ?? 100, commitSha: "abc", note: "", ...(p.basedOn ? { basedOn: p.basedOn } : {}) });
+    expect(r.submit(agent("W1"), submit("r0", "W1"))).toBe("that goal has no metric to submit results for");
+    r.must(ALICE, draft("goal.metric_set", { goalId: "prefill", metric }));
+    expect(r.state.goals.prefill!.metric).toEqual(metric);
+    // W1 works on "tokenizer", under "prefill"; the nearest goal with a metric counts.
+    expect(metricGoal(r.state, "tokenizer")?.id).toBe("prefill");
+    expect(metricGoal(r.state, "perf")).toBeNull();
+
+    expect(r.submit(agent("W2"), submit("r1", "W1"))).toBe("agents may only submit their own results");
+    r.must(agent("W1"), submit("r1", "W1", { value: 1200 }));
+    expect(r.state.results.r1).toMatchObject({ claimed: 1200, status: "pending", value: null, basedOn: null });
+    expect(r.submit(agent("W1"), submit("r1", "W1"))).toBe("result r1 already exists");
+    expect(r.submit(agent("W1"), submit("r2", "W1", { basedOn: "nope" }))).toBe("unknown result nope on that goal");
+    r.must(ALICE, draft("goal.metric_set", { goalId: "perf", metric }));
+    expect(r.submit(agent("R"), submit("r3", "R", { goalId: "prefill" }))).toBe("results go to a goal on your own goal path");
+
+    // Only the agent's runner verifies, once.
+    expect(r.submit(BOB_RUNNER, draft("result.verified", { resultId: "r1", value: 1180, log: "" }))).toBe("only the agent's runner may report this");
+    r.must(ALICE_RUNNER, draft("result.verified", { resultId: "r1", value: 1180, log: "1180 tok/s" }));
+    expect(r.state.results.r1).toMatchObject({ status: "verified", value: 1180, log: "1180 tok/s" });
+    expect(r.submit(ALICE_RUNNER, draft("result.verification_failed", { resultId: "r1", reason: "x", log: "" }))).toBe("the result has already been verified");
+    r.must(agent("W1"), submit("r4", "W1", { value: 1300, basedOn: "r1" }));
+    r.must(ALICE_RUNNER, draft("result.verification_failed", { resultId: "r4", reason: "command exited with code 1", log: "Traceback" }));
+    expect(r.state.results.r4).toMatchObject({ status: "failed", failure: "command exited with code 1", value: null, basedOn: "r1" });
+    r.must(ALICE, draft("goal.metric_set", { goalId: "prefill", metric: null }));
+    expect(r.state.goals.prefill!.metric).toBeNull();
+  });
+
+  it("ranks verified results best first in the metric's direction, earlier first on ties", () => {
+    const r = seededRoom();
+    r.must(ALICE, draft("goal.metric_set", { goalId: "prefill", metric: { name: "latency", direction: "lower", unit: "ms", command: "x" } }));
+    const values: [string, number][] = [["a", 30], ["b", 20], ["c", 20], ["d", 10]];
+    for (const [id, value] of values) r.must(agent("W1"), draft("result.submitted", { resultId: id, agentId: "W1", goalId: "prefill", value, commitSha: id, note: "" }));
+    for (const [id, value] of values.slice(0, 3)) r.must(ALICE_RUNNER, draft("result.verified", { resultId: id, value, log: "" }));
+    // d is still pending, so it is not ranked.
+    expect(leaderboard(r.state, "prefill").map((x) => x.id)).toEqual(["b", "c", "a"]);
+    r.must(ALICE, draft("goal.metric_set", { goalId: "prefill", metric: { name: "throughput", direction: "higher", unit: "", command: "x" } }));
+    expect(leaderboard(r.state, "prefill").map((x) => x.id)).toEqual(["a", "b", "c"]);
+    expect(leaderboard(r.state, "perf")).toEqual([]);
   });
 
   it("lets leaders create goals only inside their subtree", () => {

@@ -85,20 +85,35 @@ async function setup(script: Script, opts: { createAgent?: boolean; store?: Loca
   const link = new ServerLink({ serverUrl: server.base, roomId: room.roomId, token: room.runnerToken, store, log, onEvents: (e) => supervisor?.onEvents(e) });
   await link.start();
   // These cases never commit; an unexpected call fails loudly.
-  const mcp = new RoomMcp({ state: () => link.state!, emit: (d, a) => link.emit(d, a), now: Date.now, commit: () => Promise.reject(new Error("commit is not part of these tests")) });
+  const mcp = new RoomMcp({
+    state: () => link.state!,
+    emit: (d, a) => link.emit(d, a),
+    now: Date.now,
+    commit: () => Promise.reject(new Error("commit is not part of these tests")),
+    head: (agentId) => supervisor!.headFor(agentId),
+  });
   await mcp.start();
   const provider = new ScriptedProvider(script);
-  supervisor = new Supervisor({
-    runnerId: room.runnerId,
-    roomDir,
-    store,
-    mcp,
-    providers: { claude: provider, codex: provider },
-    terminals: { claude: provider, codex: provider, shell: provider },
-    log,
-    state: () => link.state!,
-    emit: (d, a = null) => link.emit(d, a),
-  });
+  const makeSupervisor = () =>
+    new Supervisor({
+      runnerId: room.runnerId,
+      roomDir,
+      store,
+      mcp,
+      providers: { claude: provider, codex: provider },
+      terminals: { claude: provider, codex: provider, shell: provider },
+      log,
+      state: () => link.state!,
+      emit: (d, a = null) => link.emit(d, a),
+    });
+  supervisor = makeSupervisor();
+  // A runner process stopping and the next one starting, on the same store and connection.
+  const restartSupervisor = async () => {
+    await supervisor!.close();
+    supervisor = makeSupervisor();
+    await supervisor.start();
+    return supervisor;
+  };
   cleanups.push(async () => {
     await supervisor!.close();
     await mcp.close();
@@ -106,7 +121,7 @@ async function setup(script: Script, opts: { createAgent?: boolean; store?: Loca
     store.close();
   });
   const serverState = () => server.state(room.roomId, room.memberToken);
-  return { server, room, roomDir, agentId, groupId, store, link, log, provider, supervisor, serverState, createAgent };
+  return { server, room, roomDir, agentId, groupId, store, link, log, provider, supervisor, serverState, createAgent, restartSupervisor };
 }
 
 describe("Supervisor", () => {
@@ -217,6 +232,55 @@ describe("Supervisor", () => {
     // The source carries on untouched.
     expect(readFileSync(join(source.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
     expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
+  });
+
+  it("verifies submitted results one at a time on a clean checkout, tells the agent, and finishes them after a restart", async () => {
+    const repo = join(tempDir("bench-repo"), "repo");
+    execFileSync("git", ["clone", "-q", createFork(), repo]);
+    const t = await setup({}, { createAgent: false, repoUrl: null });
+    const workerId = newId();
+    await appendAsMember(t.server, t.room.roomId, t.room.memberToken, [
+      draft("goal.metric_set", { goalId: t.room.rootGoalId, metric: { name: "throughput", direction: "higher", unit: "tok/s", command: "sh bench.sh" } }),
+      draft("agent.created", { agentId: workerId, groupId: null, runnerId: t.room.runnerId, name: "bencher", role: "worker", provider: "claude", model: "default", goalId: t.room.rootGoalId, instructions: "", repoPath: repo }),
+    ]);
+    await t.supervisor.start();
+    await waitFor(async () => (await t.serverState()).agents[workerId]?.process === "running", "worker running");
+    const session = () => t.provider.sessions[t.provider.specs.findIndex((s) => s.agentId === workerId)]!;
+    // A coordinated agent learns the metric and how results count.
+    expect(t.provider.specs.find((s) => s.agentId === workerId)!.systemPrompt).toContain("is measured by throughput (higher is better, in tok/s), with this command run in the repository: sh bench.sh");
+    const wt = t.store.worktree(workerId)!;
+    const commitBench = (script: string) => {
+      writeFileSync(join(wt.path, "bench.sh"), script);
+      execFileSync("git", ["add", "."], { cwd: wt.path });
+      execFileSync("git", ["-c", "user.name=me", "-c", "user.email=me@example.com", "commit", "-qm", "bench"], { cwd: wt.path });
+      return execFileSync("git", ["rev-parse", "HEAD"], { cwd: wt.path, encoding: "utf8" }).trim();
+    };
+    const submit = (resultId: string, commitSha: string, value: number) =>
+      t.link.emit([draft("result.submitted", { resultId, agentId: workerId, goalId: t.room.rootGoalId, value, commitSha, note: "" })], workerId);
+    const result = async (id: string) => (await t.serverState()).results[id];
+
+    // Both are queued at once; the second runs after the first, and each verdict reaches the agent.
+    const good = commitBench("echo warming up\necho 'throughput: 950 tok/s'\n");
+    const broken = commitBench("echo oops >&2\nexit 1\n");
+    submit("good", good, 1000);
+    submit("broken", broken, 2000);
+    await waitFor(async () => (await result("good"))?.status === "verified" && (await result("broken"))?.status === "failed", "both verdicts");
+    expect(await result("good")).toMatchObject({ value: 950, claimed: 1000 });
+    expect(await result("broken")).toMatchObject({ failure: "the command exited with code 1", log: "oops\n", value: null });
+    expect(session().sent.filter((m) => m.text.startsWith("Your result"))).toEqual([
+      { text: "Your result (1000 tok/s) was verified at 950 tok/s.", delivery: "fyi" },
+      { text: "Your result (2000 tok/s) could not be verified: the command exited with code 1.", delivery: "fyi" },
+    ]);
+
+    // A runner stopping mid-verification leaves no verdict; the next one finishes it.
+    const slow = commitBench("sleep 2\necho 'throughput: 1100 tok/s'\n");
+    submit("slow", slow, 1100);
+    await waitFor(async () => (await result("slow"))?.status === "pending", "slow result submitted");
+    await new Promise((r) => setTimeout(r, 500));
+    await t.restartSupervisor();
+    await waitFor(async () => (await result("slow"))?.status === "verified", "slow result verified after the restart", 30_000);
+    expect((await result("slow"))!.value).toBe(1100);
+    expect(t.log.lines.filter((l) => l.level === "error")).toEqual([]);
   });
 
   it("runs standalone agents of a personal workspace as plain sessions, and grouped ones with Banyan", async () => {

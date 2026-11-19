@@ -10,6 +10,7 @@ export type Route =
   | { page: "worktrees"; roomId: string }
   | { page: "findings"; roomId: string }
   | { page: "memory"; roomId: string }
+  | { page: "leaderboard"; roomId: string }
   | { page: "coordination"; roomId: string };
 
 export function parseRoute(pathname: string): Route {
@@ -22,6 +23,7 @@ export function parseRoute(pathname: string): Route {
     if (parts[2] === "worktrees") return { page: "worktrees", roomId };
     if (parts[2] === "findings") return { page: "findings", roomId };
     if (parts[2] === "memory") return { page: "memory", roomId };
+    if (parts[2] === "leaderboard") return { page: "leaderboard", roomId };
     if (parts[2] === "coordination") return { page: "coordination", roomId };
     return { page: "overview", roomId };
   }
