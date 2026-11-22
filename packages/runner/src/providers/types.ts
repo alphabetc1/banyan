@@ -34,9 +34,10 @@ export interface SessionCallbacks {
 export interface TerminalHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  // Recent output for a view that attaches now, and every later chunk until it detaches;
-  // onEnd fires once the terminal's process has exited.
-  attach(listener: (data: string) => void, onEnd?: (detail: string) => void): { backlog: string; detach(): void };
+  // Escape sequences that draw the current screen, with its history, for a view that attaches
+  // now, and every later chunk until it detaches; onEnd fires once the terminal's process has
+  // exited.
+  attach(listener: (data: string) => void, onEnd?: (detail: string) => void): { screen: string; detach(): void };
 }
 
 export interface AgentSession {

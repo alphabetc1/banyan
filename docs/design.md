@@ -431,7 +431,7 @@ Rhett 确认的方向：界面和用法像 Orca。默认打开就是本地工作
 - 团队 room 照旧，是另外连接的 server。顶栏的 room 下拉菜单里可以在「本地」和已连接的团队 room 之间切换。
 
 **Claude 终端模式**
-- runner 用 node-pty 运行真正的交互式 `claude`，界面用 xterm.js 渲染。终端数据经 runner 所在的 utility process → 主进程 → 窗口传输（Electron MessagePort）；runner 为每个终端保留一段输出缓存，重新打开时可以回放。
+- runner 用 node-pty 运行真正的交互式 `claude`，界面用 xterm.js 渲染。终端数据经 runner 所在的 utility process → 主进程 → 窗口传输（Electron MessagePort）；runner 用 headless xterm 为每个终端维护一份屏幕状态（含 scrollback），重新打开时发送序列化后的屏幕，而不是回放原始输出：从任意位置截断的输出会从转义序列中间开始，也缺少 CLI 相对重绘所依赖的光标位置。
 - 启动参数：`--settings '<json>'` 注入 HTTP hooks（指向 runner 本地的接口，路径里带上 agent 身份和随机密钥），`--mcp-config` 注入 Room MCP，`--append-system-prompt` 传入 Banyan 的协作说明，恢复时用 `--resume <session_id>`。用户自己的 settings、CLAUDE.md、plugins、skills、hooks 照常加载（已实测：注入的 hooks 和用户 hooks 合并执行）。
 - 去掉父进程是 Claude Code 时留下的环境变量（`CLAUDECODE`、`CLAUDE_CODE_CHILD_SESSION`、`CLAUDE_CODE_SESSION_*` 等），否则 Claude 不保存会话，也就无法恢复（已实测）。
 - 状态来自 hooks：`UserPromptSubmit` → 工作中；`PermissionRequest` 或 `Notification(permission_prompt)` → 等待审批（进入「需要处理」，提示在终端里处理）；之后出现 `PreToolUse`、`PostToolUse`、`Stop` 或 `UserPromptSubmit` 时清除等待状态；`Stop` → 空闲。每个事件都带 `session_id`，用来绑定会话。审批在终端里完成，UI 上没有审批卡片。

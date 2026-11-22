@@ -62,7 +62,7 @@ describe("Claude Code in a terminal", () => {
     // its person, who answers the question in the terminal (the default answer is "No, exit").
     await waitFor(async () => (await state()).agents[agentId]?.activity === "awaiting_input", "the folder trust question", STEP_TIMEOUT_MS, 500);
     // Keys go in once the whole menu is on screen, as a person would press them.
-    const screenText = () => plain(runner.terminal(agentId)?.attach(() => {}).backlog ?? "").replace(/\s/g, "");
+    const screenText = () => plain(runner.terminal(agentId)?.attach(() => {}).screen ?? "").replace(/\s/g, "");
     await waitFor(() => /entertoconfirm/i.test(screenText()), "the trust menu to be ready", STEP_TIMEOUT_MS, 200);
     await new Promise((r) => setTimeout(r, 500));
     runner.terminal(agentId)!.write("\x1b[B");
@@ -77,7 +77,7 @@ describe("Claude Code in a terminal", () => {
     const terminal = runner.terminal(agentId)!;
     const view = terminal.attach(() => {});
     // The terminal shows Claude Code's own UI, with the prompt it started on.
-    expect(plain(view.backlog).replace(/\s/g, "")).toContain("Startworkingonyourgoal");
+    expect(plain(view.screen).replace(/\s/g, "")).toContain("Startworkingonyourgoal");
     view.detach();
     const first = await transcript();
     expect(first.some((e) => e.kind === "user" && e.text.startsWith("Start working on your goal"))).toBe(true);
@@ -151,7 +151,7 @@ describe("Claude Code in a terminal", () => {
     await appendAsMember(server, room.roomId, room.memberToken, [
       draft("agent.created", { agentId, groupId: null, runnerId: room.runnerId, name: "codex-term", role: "worker", provider: "codex", model: "default", goalId: room.rootGoalId, instructions: "Reply with exactly the word PLAIN-OK and nothing else.", terminal: true }),
     ]);
-    const screen = () => plain(runner.terminal(agentId)?.attach(() => {}).backlog ?? "").replace(/\s/g, "");
+    const screen = () => plain(runner.terminal(agentId)?.attach(() => {}).screen ?? "").replace(/\s/g, "");
     const answer = async (...keys: string[]) => {
       for (const key of keys) {
         runner.terminal(agentId)!.write(key);
@@ -207,7 +207,7 @@ describe("Claude Code in a terminal", () => {
       draft("agent.created", { agentId: forkId, groupId: null, runnerId: room.runnerId, name: "codex-term-fork", role: "worker", provider: "codex", model: "default", goalId: room.rootGoalId, instructions: "", terminal: true, forkOf: agentId }),
     ]);
     const forkAgent = async () => (await state()).agents[forkId];
-    const forkScreen = () => plain(runner.terminal(forkId)?.attach(() => {}).backlog ?? "").replace(/\s/g, "");
+    const forkScreen = () => plain(runner.terminal(forkId)?.attach(() => {}).screen ?? "").replace(/\s/g, "");
     await waitFor(async () => (await forkAgent())?.process === "running", "the fork running", STEP_TIMEOUT_MS, 500);
     // It runs in its own worktree without asking which directory to use, and the hook stays
     // trusted.

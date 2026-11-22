@@ -10,13 +10,9 @@ import type { IPty } from "node-pty";
 import { agentEnv } from "../agent-env.ts";
 import type { AgentProcesses } from "../agent-processes.ts";
 import { spawnPty } from "../pty.ts";
+import { TerminalScreen } from "../terminal-screen.ts";
 import { clip, DEFAULT_MODEL, type AgentProvider, type AgentSession, type SessionCallbacks, type SessionSpec, type TerminalHandle } from "./types.ts";
 
-// Kept for a view that attaches later; the CLIs redraw their screen often, so this covers
-// several screens of history.
-const BACKLOG_MAX_CHARS = 512 * 1024;
-// Recent output checked for a question on screen before the first hook.
-const SCREEN_TAIL_CHARS = 4000;
 const COLS = 120;
 const ROWS = 36;
 // A session counts as started once a hook arrives or it has stayed up this long (questions
@@ -27,11 +23,6 @@ const STEER_SETTLE_MS = 300;
 const PASTE_SETTLE_MS = 100;
 // Notifications meaning Claude Code waits for its person, not just idle.
 const NEEDS_PERSON = new Set(["permission_prompt", "elicitation_dialog", "agent_needs_input"]);
-
-// Terminal output without escape sequences.
-function plainText(output: string): string {
-  return output.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
-}
 
 // The hook input fields Banyan reads; Claude Code 2.1 and Codex 0.167 send the same names.
 interface HookInput {
@@ -152,7 +143,7 @@ class TerminalSession implements AgentSession, TerminalHandle {
   readonly ready: Promise<void>;
   readonly terminal: TerminalHandle = this;
   private pty: IPty | null = null;
-  private backlog = "";
+  private screen = new TerminalScreen(COLS, ROWS);
   private listeners = new Set<(data: string) => void>();
   private endListeners = new Set<(detail: string) => void>();
   private initialPrompt: string | null = null;
@@ -170,6 +161,9 @@ class TerminalSession implements AgentSession, TerminalHandle {
   private turnActive = false;
   private markStarted!: () => void;
   private failStart!: (e: Error) => void;
+  // Resolves once the process has exited and its exit has been reported.
+  private exitReported: Promise<void>;
+  private markExitReported!: () => void;
 
   constructor(
     private spec: SessionSpec,
@@ -189,6 +183,7 @@ class TerminalSession implements AgentSession, TerminalHandle {
       this.failStart = reject;
     });
     this.ready.catch(() => {});
+    this.exitReported = new Promise((resolve) => (this.markExitReported = resolve));
     // The supervisor queues the first message, if any, right after start(); it becomes the
     // prompt the CLI starts with.
     queueMicrotask(() => this.spawn());
@@ -220,30 +215,39 @@ class TerminalSession implements AgentSession, TerminalHandle {
       // Up, asking nothing and without a turn yet: it waits at its prompt.
       if (!this.hookSeen && !this.awaitingPerson) this.cb.onActivity("idle");
     }, STARTED_AFTER_MS);
-    pty.onData((data) => {
-      this.backlog = (this.backlog + data).slice(-BACKLOG_MAX_CHARS);
-      for (const l of this.listeners) l(data);
-      if (!this.hookSeen) this.checkBlockingQuestion();
-    });
+    // Views get each chunk once the screen shows it, so a view attaching at any moment gets
+    // the screen and then exactly the output after it.
+    pty.onData((data) =>
+      this.screen.write(data, () => {
+        for (const l of this.listeners) l(data);
+        if (!this.hookSeen) this.checkBlockingQuestion();
+      }),
+    );
     pty.onExit(({ exitCode, signal }) => {
       clearTimeout(startedTimer);
       forget();
       this.exited = true;
-      const detail = `${command} exited (code ${exitCode}${signal ? `, signal ${signal}` : ""})`;
-      if (!this.started) this.failStart(new Error(`${detail} before starting: ${this.backlogTail()}`));
-      for (const l of this.endListeners) l(detail);
-      this.endListeners.clear();
-      this.listeners.clear();
-      // Exiting while asking its person (say, "No, exit" at the folder trust question) is
-      // their answer, not a crash to restart from.
-      this.cb.onExit({ crashed: !this.stopped && exitCode !== 0 && !this.awaitingPerson, detail: this.stopped ? "stopped" : detail });
+      // The exit is reported once the last output is on the screen and with the views.
+      this.screen.afterPending(() => this.reportExit(command, exitCode, signal));
     });
+  }
+
+  private reportExit(command: string, exitCode: number, signal: number | undefined): void {
+    const detail = `${command} exited (code ${exitCode}${signal ? `, signal ${signal}` : ""})`;
+    if (!this.started) this.failStart(new Error(`${detail} before starting: ${this.screenTail()}`));
+    for (const l of this.endListeners) l(detail);
+    this.endListeners.clear();
+    this.listeners.clear();
+    // Exiting while asking its person (say, "No, exit" at the folder trust question) is
+    // their answer, not a crash to restart from.
+    this.cb.onExit({ crashed: !this.stopped && exitCode !== 0 && !this.awaitingPerson, detail: this.stopped ? "stopped" : detail });
+    this.markExitReported();
   }
 
   // Before any hook, the CLI's own questions (folder trust, hook review) are the only sign
   // that it waits for its person; once answered, it waits for the first prompt.
   private checkBlockingQuestion(): void {
-    const screen = plainText(this.backlog.slice(-SCREEN_TAIL_CHARS)).replace(/\s/g, "");
+    const screen = this.screen.text().replace(/\s/g, "");
     const asking = this.profile.blockingQuestions.some((q) => q.test(screen));
     if (asking !== this.awaitingPerson) {
       this.awaitingPerson = asking;
@@ -251,8 +255,8 @@ class TerminalSession implements AgentSession, TerminalHandle {
     }
   }
 
-  private backlogTail(): string {
-    return plainText(this.backlog).replace(/\s+/g, " ").trim().slice(-300);
+  private screenTail(): string {
+    return this.screen.text().replace(/\s+/g, " ").trim().slice(-300);
   }
 
   private setAwaitingPerson(waiting: boolean): void {
@@ -355,11 +359,10 @@ class TerminalSession implements AgentSession, TerminalHandle {
   async stop(): Promise<void> {
     this.stopped = true;
     const pty = this.pty;
-    if (!pty || this.exited) return;
-    const exited = new Promise<void>((resolve) => pty.onExit(() => resolve()));
-    pty.kill("SIGTERM");
+    if (!pty) return;
+    if (!this.exited) pty.kill("SIGTERM");
     const timer = setTimeout(() => !this.exited && pty.kill("SIGKILL"), STOP_GRACE_MS);
-    await exited;
+    await this.exitReported;
     clearTimeout(timer);
   }
 
@@ -368,17 +371,19 @@ class TerminalSession implements AgentSession, TerminalHandle {
   }
 
   resize(cols: number, rows: number): void {
-    if (!this.exited && cols > 0 && rows > 0) this.pty?.resize(cols, rows);
+    if (this.exited || cols <= 0 || rows <= 0 || !this.pty) return;
+    this.pty.resize(cols, rows);
+    this.screen.resize(cols, rows);
   }
 
-  attach(listener: (data: string) => void, onEnd?: (detail: string) => void): { backlog: string; detach(): void } {
+  attach(listener: (data: string) => void, onEnd?: (detail: string) => void): { screen: string; detach(): void } {
     this.listeners.add(listener);
     if (onEnd) {
       if (this.exited) onEnd("terminal has ended");
       else this.endListeners.add(onEnd);
     }
     return {
-      backlog: this.backlog,
+      screen: this.screen.serialize(),
       detach: () => {
         this.listeners.delete(listener);
         if (onEnd) this.endListeners.delete(onEnd);

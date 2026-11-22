@@ -56,7 +56,7 @@ function connectTerminal(runner: Runner, agentId: string, view: Electron.Message
       view.close();
     },
   );
-  if (attached.backlog) post({ type: "data", data: attached.backlog });
+  if (attached.screen) post({ type: "data", data: attached.screen });
   view.on("message", (e: { data: TerminalPortMessage }) => {
     const msg = e.data;
     if (msg.type === "input") terminal.write(msg.data);

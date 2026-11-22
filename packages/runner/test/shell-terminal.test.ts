@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { newId } from "@banyan/shared";
 import { MemoryLogger } from "../src/logger.ts";
 import { Runner } from "../src/runner.ts";
+import { TerminalScreen } from "../src/terminal-screen.ts";
 import { appendAsMember, createFork, createRoom, draft, endProcessesUnder, tempDir, TestServer, waitFor } from "./helpers.ts";
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -43,6 +44,62 @@ describe("shell terminal", () => {
     // A shell has no hooks: no session to resume and no transcript of its own.
     const agent = (await server.state(room.roomId, room.memberToken)).agents[agentId]!;
     expect(agent.providerSessionId).toBeNull();
+    expect(log.lines.filter((l) => l.level === "error")).toEqual([]);
+  });
+
+  it("gives a view attaching mid-stream the screen so far, then exactly the output after it", { timeout: 60_000 }, async () => {
+    const server = new TestServer();
+    await server.start();
+    cleanups.push(() => server.stop());
+    const room = await createRoom(server, createFork(), true);
+    const roomDir = tempDir("shell-room");
+    const log = new MemoryLogger();
+    const runner = new Runner({ serverUrl: server.base, roomId: room.roomId, runnerId: room.runnerId, runnerToken: room.runnerToken, roomDir }, log);
+    await runner.start();
+    cleanups.push(() => runner.stop());
+    const agentId = newId();
+    await appendAsMember(server, room.roomId, room.memberToken, [
+      draft("agent.created", { agentId, groupId: null, runnerId: room.runnerId, name: "sh", role: "worker", provider: "shell", model: "default", goalId: room.rootGoalId, instructions: "", terminal: true }),
+    ]);
+    await waitFor(async () => (await server.state(room.roomId, room.memberToken)).agents[agentId]?.process === "running", "the shell running");
+    const terminal = runner.terminal(agentId)!;
+    const [cols, rows] = [80, 24];
+    terminal.resize(cols, rows);
+    // A second view attaches while the output streams, from an event of its own as a page does,
+    // so more output is on its way and not yet on the screen.
+    let early = "";
+    let later = "";
+    let attaching = false;
+    let view: ReturnType<typeof terminal.attach> | null = null;
+    terminal.attach((d) => {
+      early += d;
+      if (attaching || !early.includes("line 11000")) return;
+      attaching = true;
+      setImmediate(() => (view = terminal.attach((d2) => (later += d2))));
+    });
+    // Far more 24-bit colored output than the screen holds, then a status line redrawn in place
+    // through relative cursor moves, as the CLIs draw their spinners.
+    terminal.write(
+      "for i in $(seq 1 12000); do printf '\\033[38;2;215;134;102mline %d\\033[0m\\r\\n' $i; done; " +
+        "printf 'Composing 1s\\r\\n'; for s in $(seq 2 50); do printf '\\033[1A\\033[2KComposing %ds\\r\\n' $s; done; echo FINISHED-$((1+1))\r",
+    );
+    await waitFor(() => plain(early).includes("FINISHED-2"), "the output and the redraws", 30_000, 200);
+    // Wait for the shell's prompt after the command, so no output is still on its way.
+    await new Promise((r) => setTimeout(r, 500));
+    view!.detach();
+
+    // A terminal the size of the view, after drawing the given output.
+    const drawn = async (output: string) => {
+      const screen = new TerminalScreen(cols, rows);
+      screen.write(output);
+      await new Promise<void>((resolve) => screen.afterPending(resolve));
+      return screen;
+    };
+    const final = await drawn(terminal.attach(() => {}).screen);
+    expect(final.text()).toContain("line 12000\nComposing 50s\nFINISHED-2");
+    expect(final.text()).not.toContain("134;102m");
+    // The same screen and history, line 11000 onwards included.
+    expect((await drawn(view!.screen + later)).serialize()).toBe(final.serialize());
     expect(log.lines.filter((l) => l.level === "error")).toEqual([]);
   });
 
@@ -140,7 +197,7 @@ describe("shell terminal", () => {
     await appendAsMember(server, room.roomId, room.memberToken, [draft("agent.archived", { agentId: ids.codex })]);
     // Claude Code shows its folder trust question here; its default answer, "No, exit", ends it,
     // and as the person's answer that is not a crash to restart from.
-    await waitFor(() => /entertoconfirm/i.test(plain(runner.terminal(ids.claude)!.attach(() => {}).backlog).replace(/\s/g, "")), "the trust question's menu");
+    await waitFor(() => /entertoconfirm/i.test(plain(runner.terminal(ids.claude)!.attach(() => {}).screen).replace(/\s/g, "")), "the trust question's menu");
     await new Promise((r) => setTimeout(r, 500));
     runner.terminal(ids.claude)!.write("\r");
     await waitFor(async () => (await state()).agents[ids.claude]?.process === "exited", "claude exiting");
