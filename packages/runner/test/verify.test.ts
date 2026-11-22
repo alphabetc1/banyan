@@ -51,7 +51,9 @@ describe("result verification", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
-  it("ends the command when aborted, with no verdict", async () => {
+  // A clone and a worktree, then four seconds of waiting: more than the default test budget
+  // under parallel load.
+  it("ends the command when aborted, with no verdict", { timeout: 15_000 }, async () => {
     const { wt, sha } = await setup();
     const marker = join(tempDir("verify-abort"), "finished");
     const abort = new AbortController();
