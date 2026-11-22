@@ -29,6 +29,35 @@ describe("TerminalScreen", () => {
     expect(screen.serialize().startsWith("\x1b")).toBe(true);
   });
 
+  it("restores the alternate screen and the mouse reporting the program turned on, as Claude Code does at start", async () => {
+    const screen = new TerminalScreen(40, 5);
+    // The sequences Claude Code 2.1 sends once at start, before drawing its own UI.
+    screen.write("shell prompt\r\n\x1b[?2004h\x1b[?1004h\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[Hconversation");
+    await settled(screen);
+    const serialized = screen.serialize();
+    for (const mode of ["?1049h", "?1003h", "?1006h", "?2004h", "?1004h"]) expect(serialized).toContain(`\x1b[${mode}`);
+
+    const view = new TerminalScreen(40, 5);
+    view.write(serialized);
+    await settled(view);
+    expect(view.text()).toBe(screen.text());
+    expect(view.serialize()).toBe(serialized);
+  });
+
+  it("forgets a mouse encoding the program turned off", async () => {
+    const screen = new TerminalScreen(40, 5);
+    screen.write("\x1b[?1003h\x1b[?1006h");
+    await settled(screen);
+    expect(screen.serialize()).toContain("\x1b[?1006h");
+    screen.write("\x1b[?1006l");
+    await settled(screen);
+    expect(screen.serialize()).not.toContain("\x1b[?1006h");
+    // Several modes in one sequence count too.
+    screen.write("\x1b[?1002;1006h");
+    await settled(screen);
+    expect(screen.serialize()).toContain("\x1b[?1006h");
+  });
+
   it("shows only the visible rows as text", async () => {
     const screen = new TerminalScreen(20, 3);
     screen.write("one\r\ntwo\r\nthree\r\nfour");
