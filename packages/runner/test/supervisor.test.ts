@@ -234,7 +234,9 @@ describe("Supervisor", () => {
     expect(t.log.lines.filter((l) => l.level !== "info")).toEqual([]);
   });
 
-  it("verifies submitted results one at a time on a clean checkout, tells the agent, and finishes them after a restart", async () => {
+  // A clone, a two-second benchmark and a supervisor restart: more than the default test budget
+  // under parallel load.
+  it("verifies submitted results one at a time on a clean checkout, tells the agent, and finishes them after a restart", { timeout: 60_000 }, async () => {
     const repo = join(tempDir("bench-repo"), "repo");
     execFileSync("git", ["clone", "-q", createFork(), repo]);
     const t = await setup({}, { createAgent: false, repoUrl: null });
